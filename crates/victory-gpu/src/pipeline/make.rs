@@ -144,6 +144,9 @@ fn wait(p: &Pending, frame: u64) {
         WAITED_US.store(0, Ordering::Relaxed);
     }
     let left = BUDGET.saturating_sub(Duration::from_micros(WAITED_US.load(Ordering::Relaxed)));
+    if left.is_zero() {
+        return;
+    }
     let started = Instant::now();
     let (lock, done) = &DONE;
     let mut held = lock.lock().unwrap_or_else(|e| e.into_inner());
