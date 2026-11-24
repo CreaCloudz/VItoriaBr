@@ -1,6 +1,6 @@
 # VItoriaBr
 
-> 🔴 **AO VIVO AGORA / LIVE NOW:** Acompanhe o desenvolvimento e os testes ao vivo no YouTube → **[Assistir à live](https://www.youtube.com/watch?v=n4M-vvlKkYY)**
+> 🔴 **AO VIVO AGORA / LIVE NOW:** Acompanhe o desenvolvimento e os testes ao vivo no YouTube → **[Assistir à live](https://www.youtube.com/watch?v=GBm1pRUwWu8)**
 
 > 🇧🇷 **Português** | [🇺🇸 **English below**](#english)
 
@@ -25,7 +25,7 @@ Testado em: **Windows 11 Pro (build 26300)** · **Ryzen 7 5700X** · **40 GB RAM
 | Vídeo de introdução com áudio | ✅ Funciona (render limpo) |
 | Tela inicial, seletor de conta, perfil e saves persistentes | ✅ Funciona |
 | Tela de loading entrando no mundo (~50 s) | ✅ Funciona |
-| Mundo 3D (intro da primeira missão) | ⚠️ Alcançado com `DispatchMesh` e draws indiretos — **2 min 36 s estáveis no mundo 3D (`45` submissões 3D completas em `release`, `0` erros no D3D12 Debug Layer, `0` drops de slots)**; ainda sujeito a TDR em loops/listas pesadas |
+| Mundo 3D (cutscene de abertura e prólogo) | 🟡 **Renderizando ao vivo na RTX 5060 Ti (`~3 fps` no 1º run com `VICTORY_RELAY=2`, sem TDR)** — áreas na sombra ainda escuras (RT bounce light em progresso) |
 
 ### Cobertura de Shaders & PSOs medida na RTX 5060 Ti (`1.0.2.1`)
 Medido com `victory translate --validate --pipelines` (`dxil.dll` Windows SDK `10.0.26100.0` + driver NVIDIA `621.24`):
@@ -133,7 +133,7 @@ Tested on: **Windows 11 Pro (build 26300)** · **Ryzen 7 5700X** · **40 GB RAM*
 | Intro video with audio | ✅ Works |
 | Start screen, account selector, profile & persistent saves | ✅ Works |
 | Loading into the world (~50 s) | ✅ Works |
-| 3D world (first mission intro) | ⚠️ Reached with mesh shaders & indirect draws — **2m36s sustained in the 3D world (`45` full 3D submissions in `release`, `0` D3D12 Debug Layer errors, `0` slot drops)**; still subject to TDR on heavy loops/lists |
+| 3D world (opening cutscene & prologue) | 🟡 **Rendering live on RTX 5060 Ti (`~3 fps` on first run with `VICTORY_RELAY=2`, zero TDR)** — shadowed areas still dark (RT bounce light WIP) |
 
 #### Measured Shader & PSO Coverage on RTX 5060 Ti (`1.0.2.1`)
 Measured via `victory translate --validate --pipelines` (`dxil.dll` Windows SDK `10.0.26100.0` + NVIDIA driver `621.24`):
