@@ -6,7 +6,7 @@
 //! just before its execution, by a compute shader of ours (HLSL compiled by
 //! the system's compiler; a 5.1 shader with its root signature inside).
 //!
-//! Each list also has a budget (2^24 vertex instances or threads, groups
+//! Each list also has a budget (2^22 vertex instances or threads, groups
 //! counted as 64 threads, mesh groups as 128): records past it run empty,
 //! so a list of thousands of garbage records cannot run for seconds
 //! either.
@@ -33,7 +33,7 @@ RWByteAddressBuffer args : register(u0);
 // The list's work so far (vertex instances, threads): past the budget,
 // records run empty.
 RWByteAddressBuffer budget : register(u1);
-static const uint BUDGET = 1u << 24;
+static const uint BUDGET = 1u << 22;
 // Groups of one dispatch; more run empty.
 static const uint GROUPS = 1u << 20;
 [RootSignature(RS)]
@@ -61,13 +61,13 @@ void main(uint3 id : SV_DispatchThreadID) {
         // An uninitialized/garbage indirect buffer (e.g. when a wave64 culling
         // compute shader was refused on wave32 NVIDIA) holds huge counts:
         // zero out-of-range records instead of clamping them to 65,535 groups,
-        // matching `kind == 2` above, and cap valid dispatches to 16,384
+        // matching `kind == 2` above, and cap valid dispatches to 4,096
         // groups so one record cannot trigger Windows' 2 s TDR.
         uint3 g = args.Load3(at);
         if (g.x > 65535u || g.y > 1u || g.z > 1u) {
             g = uint3(0, 0, 0);
         } else {
-            g = uint3(min(g.x, 16384u), g.y, g.z);
+            g = uint3(min(g.x, 4096u), g.y, g.z);
         }
         cost = g.x * g.y * g.z * 128;
         args.Store3(at, g);

@@ -519,10 +519,10 @@ impl Host {
         }
         batch.flush();
         let prepared = std::time::Instant::now();
-        // Split large submissions so no single `ExecuteCommandLists` batch can
-        // accumulate more than Windows' 2 s TDR timeout on real GPUs.
-        // Diagnostics (`VICTORY_GPU_TIMING`) submits one list at a time.
-        const MAX_RUNS_PER_SUBMIT: usize = 4;
+        // Submit one command list at a time so heavy 3D-world lists (~400-500 ms
+        // each) can never combine in one `ExecuteCommandLists` call to cross
+        // Windows' 2 s TDR timeout on real GPUs.
+        const MAX_RUNS_PER_SUBMIT: usize = 1;
         #[cfg(feature = "diagnostics")]
         let chunk_size = if timing() { 1 } else { MAX_RUNS_PER_SUBMIT };
         #[cfg(not(feature = "diagnostics"))]
