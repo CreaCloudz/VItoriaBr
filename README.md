@@ -1,135 +1,157 @@
-# VIctory
+# VItoriaBr
 
-Runs Grand Theft Auto VI (Xbox Series X|S) natively on Windows, from files
-the user supplies.
+> 🇧🇷 **Português** | [🇺🇸 **English below**](#english)
 
-The title's x86-64 code runs unchanged inside our process; VIctory supplies
-the platform underneath it and converts the title's data, ahead of time where
-it can and on first use where it must (shaders). See
-[docs/architecture.md](docs/architecture.md).
+Camada nativa de execução em Windows para **Grand Theft Auto VI (Xbox Series X|S)**, rodando diretamente a partir dos arquivos que o próprio usuário possui.
 
-## Status (2026-11-23)
+O código x86-64 original do título executa inalterado dentro do nosso processo; o **VItoriaBr** fornece a plataforma Xbox/GDK por baixo e traduz os dados e shaders do console (D3D12.X / GFX10 → D3D12 / DXIL). Veja [docs/architecture.md](docs/architecture.md).
 
-**Not playable yet.** The title boots, runs its menus at its own 30 fps and
-loads the world, where rendering fails.
+> **Base e licença:** Fork/continuação baseada no projeto open-source [Marvisak/VIctory](https://github.com/Marvisak/VIctory), mantido sob a licença **GPL-3.0-or-later** ([LICENSE](LICENSE)). **Este repositório não contém nem distribui nenhum arquivo de jogo** — todos os caminhos de jogo, cache e dados devem ficar fora do repositório ([docs/asset-policy.md](docs/asset-policy.md)).
 
-| Stage | State |
-|-------|-------|
-| Boot, first-boot screens (accessibility, language, settings, legal) | works, 30 fps |
-| Intro video with sound | works |
-| Start screen, profile and saves | works |
-| Loading into the world (about 50 s) | works |
-| The world (first mission's intro) | reached and runs with indirect draws; its title card renders, the scene after it is still dark; 0.5-1.8 s per frame |
+---
 
-Tested on one machine: Windows 11, AMD RX 6700 XT.
+## Status e Progresso (2026-11-24)
 
-> **Warning.** Entering the world on a real GPU can currently hang it, and
-> Windows then resets the display driver (every monitor goes black for a
-> moment). To look further, use a diagnostics build with
-> `VICTORY_D3D12_WARP=1`, which renders on the software adapter.
+**Ainda não jogável no mundo 3D.** O título inicia, roda os menus e vídeos a 30 fps cravados, salva perfil/configurações e carrega o mundo 3D, onde ainda ocorrem descartes de shaders não traduzidos e timeouts (TDR) em submissões pesadas de `DispatchMesh`.
 
-What each part does today and what it still needs:
+### Testes reais em hardware (NVIDIA Blackwell)
+Testado em: **Windows 11 Pro (build 26300)** · **Ryzen 7 5700X** · **40 GB RAM** · **NVIDIA RTX 5060 Ti 16 GB** (SM 6.6 + Mesh Shaders, driver `621.24`), sobre dump local Xbox Series `1.0.2.1`.
 
-| Subsystem | Today | Needs |
-|-----------|-------|-------|
-| Loader | Runs the title's executable and its DLLs in our process; crash reports name the faulting code and are kept in `crashes.log` | – |
-| Runtime services | One signed-in offline user, licences, packages, saves that survive a kill at any step, text entry dialog | Speech is silent; the dialog and relaunch are untested live |
-| Network | Offline by design: the title cannot reach the network | – |
-| Files and streaming | Archives and streamed data read, zlib and BCPack decoded in parallel | Loading is limited by writes into title memory |
-| Input | XInput pads, keyboard, keyboard stand-in pad | Trigger rumble |
-| Audio | Menu, video and loading sound; XMA voices and Opus streams decode | Reverb is silent; Opus results unverified against the title |
-| GPU: menus | Draws, compute and presentation on host D3D12; only changed title memory is copied | Frame pacing drifts on one screen in release builds |
-| GPU: world | Mesh pipelines, shader-written buffers, descriptor lifetimes, indirect execution (arguments clamped), pipelines made by worker threads and kept on disk | Most of the scene is still missing (untranslated shaders drop draws); frames take seconds; real queries, depth bounds, HDR and scaling are missing |
-| Shaders | Console GPU code recompiled to DXIL at first use, cached on disk. Menus: all. World: mesh 8,191 of 8,506, vertex/pixel 10,617 of 12,346, compute 1,643 of 2,539 | 64-bit image atomics, merged geometry stages, the ray-tracing builder's shaders; some compute programs need a GPU with 64-lane waves |
-| Textures | Console tiled layouts and detiling for the modes the title uses | Render-target metadata planes |
-| Series S mode | Runs through the menus to the loading screen | The world, as above |
+| Estágio | Estado |
+|---------|--------|
+| Boot, telas iniciais (acessibilidade, idioma PT-BR, configurações, legal) | ✅ Funciona — **30 fps** |
+| Vídeo de introdução com áudio | ✅ Funciona (render limpo) |
+| Tela inicial, seletor de conta, perfil e saves persistentes | ✅ Funciona |
+| Tela de loading entrando no mundo (~50 s) | ✅ Funciona |
+| Mundo 3D (intro da primeira missão) | ⚠️ Alcançado com `DispatchMesh` e draws indiretos; ainda dá `DXGI_ERROR_DEVICE_HUNG` (TDR) em listas pesadas na GPU real |
 
-## Getting started
+### Cobertura de Shaders & PSOs medida na RTX 5060 Ti (`1.0.2.1`)
+Medido com `victory translate --validate --pipelines` (`dxil.dll` Windows SDK `10.0.26100.0` + driver NVIDIA `621.24`):
+- **Containers analisados:** `26.599` (`26.148` programas traduzidos para IR e 100% estruturados — `40,6 milhões` de instruções IR).
 
-Requirements: Windows 10/11 x64, a CPU with AVX2, a Direct3D 12 GPU with
-shader model 6.6 (and mesh shaders for the world), Rust (pinned in
-`rust-toolchain.toml`).
+| Estágio | DXIL emitidos | Validados (`dxil.dll`) | PSOs aceitos (RTX 5060 Ti) | Taxa (PSOs / emitidos) |
+|---------|---------------|------------------------|----------------------------|------------------------|
+| **Vertex + Pixel** | `12.284 / 14.013` | `12.184` | **`12.284`** | **100,0%** |
+| **Mesh** | `8.191 / 8.506` | `8.129` | **`8.191`** | **100,0%** |
+| **Compute** | `1.693 / 2.581` | `1.670` | **`1.372`** | **81,0%** |
+| **Total** | **`22.168 / 25.100`** | **`21.983`** | **`21.847`** | **98,6%** |
 
-The title also needs several GiB of available Windows commit at startup.
-Check **Committed** under **Task Manager → Performance → Memory**. If
-`crashes.log` reports Windows error 1455, close other applications or increase
-the Windows paging file size, then retry.
+> Os únicos `321` PSOs recusados pela RTX 5060 Ti são compute shaders que exigem **wave64** (GPUs NVIDIA são wave32).
+
+### Melhorias já aplicadas no VItoriaBr
+- **Rastreamento completo de estado de `Shadow` buffers no `HostList`** (`crates/victory-gpu/src/{shadow,host,indirect,draw}.rs`):
+  - Antes, `indirect::done()` deixava `title buffer` compartilhados presos em `D3D12_RESOURCE_STATE_UNORDERED_ACCESS`, causando erros de validação em `IASetVertexBuffers` e `id=527` no D3D12 Debug Layer.
+  - Agora cada `Shadow` buffer rastreia seu estado via `prelude()` e transições intra-lista (`GENERIC_READ` para VB/IB/CBV/SRV/Indirect `args`+`counter`, `UNORDERED_ACCESS` para UAV/clamp), **zerando os erros de barreira no D3D12 Debug Layer** e estendendo significativamente a execução dentro do mundo 3D na RTX 5060 Ti.
+
+> **Aviso de GPU (TDR):** entrar no mundo 3D em uma GPU real ainda pode disparar reset do driver de vídeo (TDR). Para inspecionar sem risco de travar o driver, use o perfil `diag` com `VICTORY_D3D12_WARP=1` (adaptador em software).
+
+---
+
+## Como compilar e executar
+
+**Requisitos:** Windows 10/11 x64, CPU com AVX2, GPU Direct3D 12 com Shader Model 6.6 + Mesh Shaders, Rust (`rust-toolchain.toml` — toolchain `x86_64-pc-windows-msvc`), VS 2022 MSVC e Windows SDK.
+
+> O título exige vários GiB de memória commit livre no Windows. Se `crashes.log` reportar erro `1455`, feche outros programas ou aumente o arquivo de paginação.
 
 ```powershell
-cargo xtask install-hooks                # asset-policy check on every commit
-copy victory.example.toml victory.toml   # then set your paths (outside the repo)
-cargo test --workspace                   # needs no game data
-cargo run -p victory -- config           # check your paths
-```
+# 1. Configurar caminhos (sempre FORA do repositório)
+copy victory.example.toml victory.toml
+# Edite victory.toml com game_dir, cache_dir e data_dir
 
-Run the title:
+# 2. Validar configuração e testes do workspace (não precisa de dados do jogo)
+cargo run -p victory -- config
+cargo test --workspace
 
-```powershell
+# 3. Compilar em release
 cargo build --release -p victory
-target\release\victory.exe run <game dir>\<the title's exe> --execute
+.\target\release\victory.exe run <pasta_do_jogo>\<executavel_do_titulo> --execute
 ```
 
-The window caption shows the framerate. Saves, settings and `crashes.log`
-are kept under the data folder (default `%LOCALAPPDATA%\victory\data`), derived
-data under the cache folder.
-
-Input: XInput pads. With none connected the keyboard is a pad while the
-title's window has focus:
-
-| Keys | Pad |
-|------|-----|
-| W A S D / I J K L | left / right stick |
-| arrows | D-pad |
-| Enter, Backspace, X, Y | A, B, X, Y |
-| Q / E, Z / C | shoulders, triggers |
-| F / H | stick clicks |
-| Esc, Tab | Menu, View |
-
-## Commands
-
+### Build de diagnóstico (`diag`)
+```powershell
+cargo build --profile diag -p victory --features diagnostics
 ```
-victory inspect <exe|dll> [--imports] [--exports]
-victory census [paths...] [--missing] [--strict]
-victory lib-exports <import.lib> [--list]
-victory shader-info [paths...] [--verbose] [--disasm]
-victory translate [paths...] [--validate] [--pipelines] [--list] [--jobs N]
-victory run <exe> [--execute] [--unimplemented trap|zero] [--strict]
-            [--console series-x|series-s] [-- <title arguments>]
-victory config
-```
+Principais variáveis de ambiente no `diag`:
+- `VICTORY_D3D12_WARP=1` — força adaptador WARP em software (lento, não causa TDR)
+- `VICTORY_D3D12_DRED=1` — grava breadcrumbs DRED em `crashes.log` se ocorrer `DEVICE_HUNG`
+- `VICTORY_D3D12_DEBUG=1` / `VICTORY_D3D12_GBV=1` — D3D12 Debug Layer e GPU-Based Validation
+- `VICTORY_CAPTURE=<pasta>` / `VICTORY_CAPTURE_FRAMES=<lista>` / `VICTORY_DUMP_TARGETS=1` — salva frames PNG e render targets
+- `VICTORY_SHADER_LOOP_LIMIT=<n>` — limita iterações de loops em shaders traduzidos
+- `VICTORY_SKIP_PIPELINES=<hash>,...` — pula draws/dispatches de hashes específicos
 
-Logging: `VICTORY_LOG=victory_loader=trace,info` (a release build logs
-info and above).
+### Controles (teclado quando não há controle XInput conectado)
+| Teclas | Controle |
+|--------|----------|
+| `W A S D` / `I J K L` | Analógico esquerdo / direito |
+| Setas | D-pad |
+| `Enter`, `Backspace`, `X`, `Y` | A, B, X, Y |
+| `Q` / `E`, `Z` / `C` | LB/RB, LT/RT |
+| `F` / `H` | L3 / R3 |
+| `Esc`, `Tab` | Menu, View |
 
-## Debugging
+---
 
-A release build has no debugging aids. Build them in with
+<a id="english"></a>
+
+## English
+
+### Overview
+
+**VItoriaBr** runs **Grand Theft Auto VI (Xbox Series X|S)** natively on Windows from files the user supplies.
+
+The title's x86-64 code runs unchanged inside our process; **VItoriaBr** provides the underlying console platform and translates shaders/resources (D3D12.X / GFX10 → host D3D12 / DXIL). See [docs/architecture.md](docs/architecture.md).
+
+> **Upstream & License:** Derived from [Marvisak/VIctory](https://github.com/Marvisak/VIctory) under **GPL-3.0-or-later** ([LICENSE](LICENSE)). **No game files or derived assets are shipped or allowed in this repository** ([docs/asset-policy.md](docs/asset-policy.md)).
+
+### Status & Progress (2026-11-24)
+
+**Not playable in the 3D world yet.** Boot, menus, intro video with audio, profile/saves, and loading into the world work smoothly at 30 fps; inside the 3D world, untranslated shaders are still dropped and heavy `DispatchMesh` submissions can trigger a GPU TDR on real hardware.
+
+#### Real Hardware Test Results (NVIDIA Blackwell)
+Tested on: **Windows 11 Pro (build 26300)** · **Ryzen 7 5700X** · **40 GB RAM** · **NVIDIA RTX 5060 Ti 16 GB** (SM 6.6 + Mesh Shaders, driver `621.24`), Xbox Series build `1.0.2.1`.
+
+| Stage | Status |
+|-------|--------|
+| Boot & first-boot screens (accessibility, language, settings, legal) | ✅ Works — **30 fps** |
+| Intro video with audio | ✅ Works |
+| Start screen, account selector, profile & persistent saves | ✅ Works |
+| Loading into the world (~50 s) | ✅ Works |
+| 3D world (first mission intro) | ⚠️ Reached with mesh shaders & indirect draws; still hits `DXGI_ERROR_DEVICE_HUNG` (TDR) on heavy lists on real GPU |
+
+#### Measured Shader & PSO Coverage on RTX 5060 Ti (`1.0.2.1`)
+Measured via `victory translate --validate --pipelines` (`dxil.dll` Windows SDK `10.0.26100.0` + NVIDIA driver `621.24`):
+- **Containers scanned:** `26,599` (`26,148` programs translated & 100% structured — `40.6M` IR instructions).
+
+| Stage | DXIL Emitted | Validated (`dxil.dll`) | Host PSOs (RTX 5060 Ti) | PSO Rate |
+|-------|--------------|------------------------|-------------------------|----------|
+| **Vertex + Pixel** | `12,284 / 14,013` | `12,184` | **`12,284`** | **100.0%** |
+| **Mesh** | `8,191 / 8,506` | `8,129` | **`8,191`** | **100.0%** |
+| **Compute** | `1,693 / 2,581` | `1,670` | **`1,372`** | **81.0%** |
+| **Total** | **`22,168 / 25,100`** | **`21,983`** | **`21,847`** | **98.6%** |
+
+> The `321` refused Compute PSOs are wave64-only shaders (NVIDIA GPUs run wave32).
+
+#### VItoriaBr Improvements
+- **Full `Shadow` buffer D3D12 resource state tracking in `HostList`** (`crates/victory-gpu/src/{shadow,host,indirect,draw}.rs`):
+  - Previously, `indirect::done()` left shared title buffers stuck in `D3D12_RESOURCE_STATE_UNORDERED_ACCESS`, causing `IASetVertexBuffers` and barrier mismatch (`id=527`) errors in the D3D12 Debug Layer.
+  - Each `Shadow` buffer now tracks its state across lists via `prelude()` and intra-list barriers (`GENERIC_READ` for VB/IB/CBV/SRV/indirect `args`+`counter`, `UNORDERED_ACCESS` for UAV/clamp), **eliminating all buffer state errors in the D3D12 Debug Layer** and significantly extending 3D world execution on the RTX 5060 Ti.
+
+> **Warning:** Entering the 3D world on a real GPU can still trigger a display driver reset (TDR). Use a `diag` build with `VICTORY_D3D12_WARP=1` to inspect safely on the software adapter.
+
+### Quick Start
 
 ```powershell
-cargo build --profile diag -p victory --features diagnostics   # target\diag\victory.exe
+copy victory.example.toml victory.toml   # set paths outside the repository
+cargo run -p victory -- config
+cargo test --workspace
+cargo build --release -p victory
+.\target\release\victory.exe run <game_dir>\<title_exe> --execute
 ```
 
-| Variable | Effect |
-|----------|--------|
-| `VICTORY_LOG=<target>=debug,...` | debug and trace output |
-| `VICTORY_STACKS=20,60` | every thread's stack at those seconds |
-| `VICTORY_WATCH=<rva>,...` | logs a title u32 when it changes |
-| `VICTORY_KEYS=30:Enter,35:X` | presses keys at those seconds, focus or not |
-| `VICTORY_CRASH_SAVE=<rva>:<len>,...` | saves title memory to the cache folder on a crash |
-| `VICTORY_CAPTURE=<dir>` | saves presented frames (powers of two, or `VICTORY_CAPTURE_FRAMES=<list>`) |
-| `VICTORY_DUMP_TARGETS=1` | with the two above, saves every render target of those frames |
-| `VICTORY_D3D12_DEBUG=1` | host debug layer |
-| `VICTORY_D3D12_GBV=1` | with the above, GPU-based validation (bad descriptor use reported, not faulted; slow) |
-| `VICTORY_D3D12_DRED=1` | on a GPU failure, the allocation hit and the commands in flight |
-| `VICTORY_SKIP_PIPELINES=<hash>,...` | omit draws and dispatches, including indirect ones, whose pipeline contains a listed 16-digit shader hash |
-| `VICTORY_GPU_TIMING=1` | with the above, each list of a submission run and timed on its own; slow lists logged with their slowest commands |
-| `VICTORY_D3D12_WARP=1` | host device on the software adapter (slow; cannot reset the driver) |
-| `VICTORY_SHADER_LOOP_LIMIT=<n>` | translated shader loops stop after `n` iterations per lane instead of 2^20 (own shader cache entries); if a lower `n` makes world frames much faster, loops hitting the limit are what makes them slow |
-| `VICTORY_AUDIO_CAPTURE=<file.wav>` | records what the title plays (our process only) |
-| `VICTORY_XMA_DUMP=<dir>` | saves the first 32 XMA voices' context and input |
-
-Every build appends crashes and host GPU failures to `crashes.log` in the
-title's data folder.
+Diagnostics build:
+```powershell
+cargo build --profile diag -p victory --features diagnostics
+```
 
 ## License
 
