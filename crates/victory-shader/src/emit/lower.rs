@@ -6746,9 +6746,23 @@ impl<'a> Lower<'a> {
         {
             return Err("a 16-bit output the stage data does not mark");
         }
-        // A mesh lane writes its own vertex or primitive, where it exports.
-        let at = if mesh {
-            self.begin_guarded(guard)
+        // A mesh lane writes its own vertex or primitive, where it exports;
+        // guard against out-of-bounds thread indices (threads > max_vertices
+        // or max_primitives) so host mesh hardware never faults.
+        let at = if let Some(m) = self.s.mesh {
+            let limit = if primitive {
+                m.max_primitives
+            } else {
+                m.max_vertices
+            };
+            let flat = self.mesh_thread();
+            let lim = self.s.m.i32(limit);
+            let in_bounds = self.s.m.cmp(self.cur, pred::IULT, flat, lim);
+            let g = match guard {
+                Some(g) => self.s.m.bin(self.cur, Bin::And, g, in_bounds),
+                None => in_bounds,
+            };
+            self.begin_guarded(Some(g))
         } else {
             None
         };
@@ -6809,20 +6823,36 @@ impl<'a> Lower<'a> {
     }
 
     /// Mesh: `exp prim` as the lane's primitive. Bit 31 culls it (all
-    /// indices 0: no area).
+    /// indices 0: no area); any out-of-range vertex index (>= max_vertices)
+    /// also culls the primitive so host mesh hardware never faults.
     fn emit_indices(&mut self, e: &Export, guard: Option<V>) -> Result<(), Why> {
         let v = e.values[0].ok_or("a primitive export without its indices")?;
         let x = self.i32_of(v)?;
-        let at = self.begin_guarded(guard);
+        let m = self.s.mesh.expect("mesh");
+        let flat = self.mesh_thread();
+        let max_p = self.s.m.i32(m.max_primitives);
+        let in_bounds = self.s.m.cmp(self.cur, pred::IULT, flat, max_p);
+        let g = match guard {
+            Some(g) => self.s.m.bin(self.cur, Bin::And, g, in_bounds),
+            None => in_bounds,
+        };
+        let at = self.begin_guarded(Some(g));
         let c = self.cur;
         let z = self.s.m.i32(0);
-        let culled = self.s.m.cmp(c, pred::SLT, x, z);
-        let mut args = vec![self.mesh_thread()];
-        for k in 0..3 {
-            let (shift, mask) = (self.s.m.i32(10 * k), self.s.m.i32(0x3FF));
+        let max_v = self.s.m.i32(m.max_vertices);
+        let mut bad = self.s.m.cmp(c, pred::SLT, x, z);
+        let mut indices = [z; 3];
+        for (k, slot) in indices.iter_mut().enumerate() {
+            let (shift, mask) = (self.s.m.i32(10 * k as u32), self.s.m.i32(0x3FF));
             let i = self.s.m.bin(c, Bin::LShr, x, shift);
             let i = self.s.m.bin(c, Bin::And, i, mask);
-            args.push(self.s.m.select(c, culled, z, i));
+            let oob = self.s.m.cmp(c, pred::IUGE, i, max_v);
+            bad = self.s.m.bin(c, Bin::Or, bad, oob);
+            *slot = i;
+        }
+        let mut args = vec![flat];
+        for i in indices {
+            args.push(self.s.m.select(c, bad, z, i));
         }
         let void = self.s.t.void;
         self.s

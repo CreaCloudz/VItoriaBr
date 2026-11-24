@@ -71,10 +71,10 @@ const DYNAMIC: u32 = 1 << 18;
 
 /// The dynamic slots of a heap whose host would not take [`DYNAMIC`] more
 /// (a capped heap, NVIDIA): 2^16 ran out immediately in the 3D world on
-/// RTX 5060 Ti, dropping 16k+ draws/dispatches; 2^17 gives twice the headroom
-/// while keeping 868k direct title slots (anything past `count` is remapped
-/// dynamically in `draw::State::tables`).
-const MIN_DYNAMIC: u32 = 1 << 17;
+/// RTX 5060 Ti, and 2^17 still hit the cap on 32-list 3D frames; 2^18 matches
+/// [`DYNAMIC`] while keeping 737k direct title slots (anything past `count` is
+/// remapped dynamically in `draw::State::tables`).
+const MIN_DYNAMIC: u32 = 1 << 18;
 
 impl HostHeap {
     pub(crate) fn new(sampler: bool, count: u32) -> Option<Self> {
