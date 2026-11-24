@@ -25,7 +25,7 @@ Testado em: **Windows 11 Pro (build 26300)** · **Ryzen 7 5700X** · **40 GB RAM
 | Vídeo de introdução com áudio | ✅ Funciona (render limpo) |
 | Tela inicial, seletor de conta, perfil e saves persistentes | ✅ Funciona |
 | Tela de loading entrando no mundo (~50 s) | ✅ Funciona |
-| Mundo 3D (intro da primeira missão) | ⚠️ Alcançado com `DispatchMesh` e draws indiretos; ainda dá `DXGI_ERROR_DEVICE_HUNG` (TDR) em listas pesadas na GPU real |
+| Mundo 3D (intro da primeira missão) | ⚠️ Alcançado com `DispatchMesh` e draws indiretos — **2 min 36 s estáveis no mundo 3D (`45` submissões 3D completas em `release`, `0` erros no D3D12 Debug Layer, `0` drops de slots)**; ainda sujeito a TDR em loops/listas pesadas |
 
 ### Cobertura de Shaders & PSOs medida na RTX 5060 Ti (`1.0.2.1`)
 Medido com `victory translate --validate --pipelines` (`dxil.dll` Windows SDK `10.0.26100.0` + driver NVIDIA `621.24`):
@@ -48,8 +48,17 @@ Medido com `victory translate --validate --pipelines` (`dxil.dll` Windows SDK `1
   - `image_sample_b`, `_cl`/`_o`, `image_gather4_l` e leitura/escrita thread-safe de bytes/halves em LDS (`ds_read_{u8,i8,u16,i16}`, `ds_write_{b8,b16}{,_d16_hi}`).
 - **Reconciliação de modos de interpolação DXIL por row da assinatura** (`5943771`, `crates/victory-shader/src/emit/shader.rs`):
   - Elementos que compartilham a mesma row na assinatura passam a emitir o mesmo modo de interpolação, **zerando ~48 erros do validador `dxil.dll`**.
-- **Reciclagem imediata de slots dinâmicos do descriptor heap** (`a65d054`, `crates/victory-gpu/src/{descriptor/host,draw,list,queue}.rs`):
-  - Os slots voltam ao heap assim que o `host.execute` síncrono termina, e o `MIN_DYNAMIC` sobe de `2^16` para **`2^17` (131.072)** em heaps limitados (NVIDIA, limite de 1.000.000 views), **corrigindo os 16.384+ draws/dispatches descartados** por esgotamento de slots no mundo 3D.
+- **Reciclagem imediata de slots dinâmicos do descriptor heap** (`a65d054`, `bd33acc`, `crates/victory-gpu/src/{descriptor/host,draw,list,queue}.rs`):
+  - Os slots voltam ao heap assim que o `host.execute` síncrono termina, e o `MIN_DYNAMIC` sobe para **`2^18` (262.144)** em heaps limitados (NVIDIA, limite de 1.000.000 views), **zerando os 16.384+ draws/dispatches descartados** no mundo 3D.
+- **Cubemap `image_sample_d_cl`** (`77b4b4c`, `crates/victory-shader/src/emit/lower.rs`):
+  - `deriv_dwords` ajustado para `grads = 2` em cubemaps (`kind == 5`), destravando +27 shaders.
+- **Estabilidade de Mesh Shaders, LDS e barreiras na NVIDIA Blackwell (wave32)** (`bd33acc`, `a13a719`, `1ece3a6`, `911267c`, `808a209`, `crates/victory-shader/src/emit/lower.rs`):
+  - `mesh_prologue` limita `setMeshOutputCounts` ao número de threads para não deixar primitivas não-inicializadas; `emitIndices`, `storeVertexOutput` e `storePrimitiveOutput` validam limites contra `max_vertices`/`max_primitives`.
+  - Todos os acessos a `LDS` (`ds_read`, `ds_write`, atomics) fazem bounds check fiel ao RDNA2 (OOB lê `0` e descarta escrita, evitando traps de SRAM na NVIDIA).
+  - `s_barrier` em blocos que não pós-dominam a entrada, dentro de loops ou após `abort_block` emite apenas memory fence (`TGSM_FENCE`/`UAV_FENCE`), prevenindo deadlocks de `BAR.SYNC` em wave32.
+- **Proteção anti-TDR em submissões e `ExecuteIndirect`** (`1ca533d`, `8a75883`, `6f99f75`, `crates/victory-gpu/src/{host,indirect}.rs`):
+  - `host::execute()` submete 1 command list por vez com fence wait (evitando acumular >2 s de TDR); `indirect.rs` zera argumentos `DispatchMesh` corrompidos e limita dispatches válidos (`4096` grupos, `BUDGET = 2^22`).
+  - `VICTORY_SHADER_LOOP_LIMIT` habilitado também em `release` (com padrão `4096`).
 
 > **Aviso de GPU (TDR):** entrar no mundo 3D em uma GPU real ainda pode disparar reset do driver de vídeo (TDR). Para inspecionar sem risco de travar o driver, use o perfil `diag` com `VICTORY_D3D12_WARP=1` (adaptador em software).
 
@@ -124,7 +133,7 @@ Tested on: **Windows 11 Pro (build 26300)** · **Ryzen 7 5700X** · **40 GB RAM*
 | Intro video with audio | ✅ Works |
 | Start screen, account selector, profile & persistent saves | ✅ Works |
 | Loading into the world (~50 s) | ✅ Works |
-| 3D world (first mission intro) | ⚠️ Reached with mesh shaders & indirect draws; still hits `DXGI_ERROR_DEVICE_HUNG` (TDR) on heavy lists on real GPU |
+| 3D world (first mission intro) | ⚠️ Reached with mesh shaders & indirect draws — **2m36s sustained in the 3D world (`45` full 3D submissions in `release`, `0` D3D12 Debug Layer errors, `0` slot drops)**; still subject to TDR on heavy loops/lists |
 
 #### Measured Shader & PSO Coverage on RTX 5060 Ti (`1.0.2.1`)
 Measured via `victory translate --validate --pipelines` (`dxil.dll` Windows SDK `10.0.26100.0` + NVIDIA driver `621.24`):
@@ -147,8 +156,17 @@ Measured via `victory translate --validate --pipelines` (`dxil.dll` Windows SDK 
   - `image_sample_b`, `_cl`/`_o`, `image_gather4_l`, plus thread-safe byte/half reads and writes in LDS (`ds_read_{u8,i8,u16,i16}`, `ds_write_{b8,b16}{,_d16_hi}`).
 - **Per-row DXIL interpolation mode reconciliation on the signature** (`5943771`, `crates/victory-shader/src/emit/shader.rs`):
   - Elements sharing the same signature row now emit the same interpolation mode, **clearing ~48 `dxil.dll` validator errors**.
-- **Immediate recycling of dynamic descriptor-heap slots** (`a65d054`, `crates/victory-gpu/src/{descriptor/host,draw,list,queue}.rs`):
-  - Slots return to the heap as soon as the synchronous `host.execute` completes, and `MIN_DYNAMIC` rises from `2^16` to **`2^17` (131,072)** on capped heaps (NVIDIA, 1,000,000-view limit), **fixing the 16,384+ draws/dispatches dropped** by slot exhaustion in the 3D world.
+- **Immediate recycling of dynamic descriptor-heap slots** (`a65d054`, `bd33acc`, `crates/victory-gpu/src/{descriptor/host,draw,list,queue}.rs`):
+  - Slots return to the heap as soon as the synchronous `host.execute` completes, and `MIN_DYNAMIC` rises to **`2^18` (262,144)** on capped heaps (NVIDIA, 1,000,000-view limit), **eliminating the 16,384+ dropped draws/dispatches** in the 3D world.
+- **Cubemap `image_sample_d_cl`** (`77b4b4c`, `crates/victory-shader/src/emit/lower.rs`):
+  - Uses `grads = 2` for `deriv_dwords` on cubemaps (`kind == 5`), unblocking +27 shaders.
+- **Mesh Shader, LDS, and barrier safety on NVIDIA Blackwell (wave32)** (`bd33acc`, `a13a719`, `1ece3a6`, `911267c`, `808a209`, `crates/victory-shader/src/emit/lower.rs`):
+  - `mesh_prologue` caps `setMeshOutputCounts` to thread count so no uninitialized primitives are left; `emitIndices`, `storeVertexOutput`, and `storePrimitiveOutput` enforce `max_vertices`/`max_primitives` bounds.
+  - All `LDS` reads, writes, and atomics enforce RDNA2-accurate OOB semantics (read `0`, drop writes) to prevent NVIDIA shared-memory traps.
+  - `s_barrier` in non-post-dominating, loop, or post-`abort_block` blocks emits a memory-only fence (`TGSM_FENCE`/`UAV_FENCE`), preventing `BAR.SYNC` deadlocks on wave32.
+- **Anti-TDR submission chunking & indirect bounds** (`1ca533d`, `8a75883`, `6f99f75`, `crates/victory-gpu/src/{host,indirect}.rs`):
+  - `host::execute()` submits one command list per fence wait; `indirect.rs` zeroes out-of-range `DispatchMesh` arguments and caps valid dispatches (`4096` groups, `BUDGET = 2^22`).
+  - `VICTORY_SHADER_LOOP_LIMIT` enabled in `release` builds as well (default `4096`).
 
 > **Warning:** Entering the 3D world on a real GPU can still trigger a display driver reset (TDR). Use a `diag` build with `VICTORY_D3D12_WARP=1` to inspect safely on the software adapter.
 

@@ -234,7 +234,7 @@ struct Lower<'a> {
 /// until the driver resets it. A lane that reaches the limit leaves the
 /// program as killed (a pixel discards).
 // shortcut: a genuine loop of more iterations than this is cut short too.
-pub(super) const LOOP_LIMIT: u32 = 1 << 20;
+pub(super) const LOOP_LIMIT: u32 = 4096;
 
 /// Lane masks read as numbers (`s_bcnt1`, `s_ff1`, `v_mbcnt`, scalar
 /// compares, bit tests) are ballots of the lanes' booleans, taken where the
