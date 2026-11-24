@@ -2010,14 +2010,17 @@ impl<'a> Lower<'a> {
         }
         let e = self.s.entry;
         let void = self.s.t.void;
-        let (v, p) = (
-            self.s.m.i32(mesh.max_vertices),
-            self.s.m.i32(mesh.max_primitives),
-        );
+        // Every lane only ever writes its own `flat` (`0..threads`) vertex and
+        // primitive slot; capping `setMeshOutputCounts` to `threads` ensures
+        // every declared primitive is initialized to (0, 0, 0) below (no
+        // uninitialized primitive indices left for NVIDIA's rasterizer).
+        let max_v = mesh.max_vertices.min(threads);
+        let max_p = mesh.max_primitives.min(threads);
+        let (v, p) = (self.s.m.i32(max_v), self.s.m.i32(max_p));
         self.s
             .op(e, "setMeshOutputCounts", Attr::NoUnwind, void, 168, &[v, p]);
         let flat = self.mesh_thread();
-        let guard = (threads > mesh.max_primitives).then(|| self.s.m.cmp(e, pred::IULT, flat, p));
+        let guard = (threads > max_p).then(|| self.s.m.cmp(e, pred::IULT, flat, p));
         let at = self.begin_guarded(guard);
         let z = self.s.m.i32(0);
         self.s.op(
@@ -6844,10 +6847,11 @@ impl<'a> Lower<'a> {
         // guard against out-of-bounds thread indices (threads > max_vertices
         // or max_primitives) so host mesh hardware never faults.
         let at = if let Some(m) = self.s.mesh {
+            let threads = self.s.threads.expect("mesh")[0];
             let limit = if primitive {
-                m.max_primitives
+                m.max_primitives.min(threads)
             } else {
-                m.max_vertices
+                m.max_vertices.min(threads)
             };
             let flat = self.mesh_thread();
             let lim = self.s.m.i32(limit);
@@ -6923,8 +6927,9 @@ impl<'a> Lower<'a> {
         let v = e.values[0].ok_or("a primitive export without its indices")?;
         let x = self.i32_of(v)?;
         let m = self.s.mesh.expect("mesh");
+        let threads = self.s.threads.expect("mesh")[0];
         let flat = self.mesh_thread();
-        let max_p = self.s.m.i32(m.max_primitives);
+        let max_p = self.s.m.i32(m.max_primitives.min(threads));
         let in_bounds = self.s.m.cmp(self.cur, pred::IULT, flat, max_p);
         let g = match guard {
             Some(g) => self.s.m.bin(self.cur, Bin::And, g, in_bounds),
@@ -6933,7 +6938,7 @@ impl<'a> Lower<'a> {
         let at = self.begin_guarded(Some(g));
         let c = self.cur;
         let z = self.s.m.i32(0);
-        let max_v = self.s.m.i32(m.max_vertices);
+        let max_v = self.s.m.i32(m.max_vertices.min(threads));
         let mut bad = self.s.m.cmp(c, pred::SLT, x, z);
         let mut indices = [z; 3];
         for (k, slot) in indices.iter_mut().enumerate() {
