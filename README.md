@@ -31,17 +31,23 @@ Medido com `victory translate --validate --pipelines` (`dxil.dll` Windows SDK `1
 
 | Estágio | DXIL emitidos | Validados (`dxil.dll`) | PSOs aceitos (RTX 5060 Ti) | Taxa (PSOs / emitidos) |
 |---------|---------------|------------------------|----------------------------|------------------------|
-| **Vertex + Pixel** | `12.284 / 14.013` | `12.184` | **`12.284`** | **100,0%** |
-| **Mesh** | `8.191 / 8.506` | `8.129` | **`8.191`** | **100,0%** |
-| **Compute** | `1.693 / 2.581` | `1.670` | **`1.372`** | **81,0%** |
-| **Total** | **`22.168 / 25.100`** | **`21.983`** | **`21.847`** | **98,6%** |
+| **Vertex + Pixel** | `12.287 / 14.039` | `12.245` | **`12.287`** | **100,0%** |
+| **Mesh** | `8.214 / 8.713` | `8.153` | **`8.214`** | **100,0%** |
+| **Compute** | `1.471 / 2.582` | `1.447` | **`1.133`** | **77,0%** |
+| **Total** | **`21.972 / 25.334`** | **`21.845`** | **`21.634`** | **98,5%** |
 
-> Os únicos `321` PSOs recusados pela RTX 5060 Ti são compute shaders que exigem **wave64** (GPUs NVIDIA são wave32).
+> Os únicos `338` PSOs recusados pela RTX 5060 Ti são compute shaders que exigem **wave64** (GPUs NVIDIA são wave32).
 
 ### Melhorias já aplicadas no VItoriaBr
 - **Rastreamento completo de estado de `Shadow` buffers no `HostList`** (`crates/victory-gpu/src/{shadow,host,indirect,draw}.rs`):
   - Antes, `indirect::done()` deixava `title buffer` compartilhados presos em `D3D12_RESOURCE_STATE_UNORDERED_ACCESS`, causando erros de validação em `IASetVertexBuffers` e `id=527` no D3D12 Debug Layer.
   - Agora cada `Shadow` buffer rastreia seu estado via `prelude()` e transições intra-lista (`GENERIC_READ` para VB/IB/CBV/SRV/Indirect `args`+`counter`, `UNORDERED_ACCESS` para UAV/clamp), **zerando os erros de barreira no D3D12 Debug Layer** e estendendo significativamente a execução dentro do mundo 3D na RTX 5060 Ti.
+- **Suporte a `MIMG` `a16` e operações LDS de byte/half** (`2471a62`, `crates/victory-shader/src/emit/lower.rs`):
+  - `image_sample_b`, `_cl`/`_o`, `image_gather4_l` e leitura/escrita thread-safe de bytes/halves em LDS (`ds_read_{u8,i8,u16,i16}`, `ds_write_{b8,b16}{,_d16_hi}`).
+- **Reconciliação de modos de interpolação DXIL por row da assinatura** (`5943771`, `crates/victory-shader/src/emit/shader.rs`):
+  - Elementos que compartilham a mesma row na assinatura passam a emitir o mesmo modo de interpolação, **zerando ~48 erros do validador `dxil.dll`**.
+- **Reciclagem imediata de slots dinâmicos do descriptor heap** (`a65d054`, `crates/victory-gpu/src/{descriptor/host,draw,list,queue}.rs`):
+  - Os slots voltam ao heap assim que o `host.execute` síncrono termina, e o `MIN_DYNAMIC` sobe de `2^16` para **`2^17` (131.072)** em heaps limitados (NVIDIA, limite de 1.000.000 views), **corrigindo os 16.384+ draws/dispatches descartados** por esgotamento de slots no mundo 3D.
 
 > **Aviso de GPU (TDR):** entrar no mundo 3D em uma GPU real ainda pode disparar reset do driver de vídeo (TDR). Para inspecionar sem risco de travar o driver, use o perfil `diag` com `VICTORY_D3D12_WARP=1` (adaptador em software).
 
@@ -124,17 +130,23 @@ Measured via `victory translate --validate --pipelines` (`dxil.dll` Windows SDK 
 
 | Stage | DXIL Emitted | Validated (`dxil.dll`) | Host PSOs (RTX 5060 Ti) | PSO Rate |
 |-------|--------------|------------------------|-------------------------|----------|
-| **Vertex + Pixel** | `12,284 / 14,013` | `12,184` | **`12,284`** | **100.0%** |
-| **Mesh** | `8,191 / 8,506` | `8,129` | **`8,191`** | **100.0%** |
-| **Compute** | `1,693 / 2,581` | `1,670` | **`1,372`** | **81.0%** |
-| **Total** | **`22,168 / 25,100`** | **`21,983`** | **`21,847`** | **98.6%** |
+| **Vertex + Pixel** | `12,287 / 14,039` | `12,245` | **`12,287`** | **100.0%** |
+| **Mesh** | `8,214 / 8,713` | `8,153` | **`8,214`** | **100.0%** |
+| **Compute** | `1,471 / 2,582` | `1,447` | **`1,133`** | **77.0%** |
+| **Total** | **`21,972 / 25,334`** | **`21,845`** | **`21,634`** | **98.5%** |
 
-> The `321` refused Compute PSOs are wave64-only shaders (NVIDIA GPUs run wave32).
+> The `338` refused Compute PSOs are wave64-only shaders (NVIDIA GPUs run wave32).
 
 #### VItoriaBr Improvements
 - **Full `Shadow` buffer D3D12 resource state tracking in `HostList`** (`crates/victory-gpu/src/{shadow,host,indirect,draw}.rs`):
   - Previously, `indirect::done()` left shared title buffers stuck in `D3D12_RESOURCE_STATE_UNORDERED_ACCESS`, causing `IASetVertexBuffers` and barrier mismatch (`id=527`) errors in the D3D12 Debug Layer.
   - Each `Shadow` buffer now tracks its state across lists via `prelude()` and intra-list barriers (`GENERIC_READ` for VB/IB/CBV/SRV/indirect `args`+`counter`, `UNORDERED_ACCESS` for UAV/clamp), **eliminating all buffer state errors in the D3D12 Debug Layer** and significantly extending 3D world execution on the RTX 5060 Ti.
+- **`MIMG` `a16` support and LDS byte/half operations** (`2471a62`, `crates/victory-shader/src/emit/lower.rs`):
+  - `image_sample_b`, `_cl`/`_o`, `image_gather4_l`, plus thread-safe byte/half reads and writes in LDS (`ds_read_{u8,i8,u16,i16}`, `ds_write_{b8,b16}{,_d16_hi}`).
+- **Per-row DXIL interpolation mode reconciliation on the signature** (`5943771`, `crates/victory-shader/src/emit/shader.rs`):
+  - Elements sharing the same signature row now emit the same interpolation mode, **clearing ~48 `dxil.dll` validator errors**.
+- **Immediate recycling of dynamic descriptor-heap slots** (`a65d054`, `crates/victory-gpu/src/{descriptor/host,draw,list,queue}.rs`):
+  - Slots return to the heap as soon as the synchronous `host.execute` completes, and `MIN_DYNAMIC` rises from `2^16` to **`2^17` (131,072)** on capped heaps (NVIDIA, 1,000,000-view limit), **fixing the 16,384+ draws/dispatches dropped** by slot exhaustion in the 3D world.
 
 > **Warning:** Entering the 3D world on a real GPU can still trigger a display driver reset (TDR). Use a `diag` build with `VICTORY_D3D12_WARP=1` to inspect safely on the software adapter.
 
