@@ -413,8 +413,8 @@ impl<'a> Lower<'a> {
             s.threads = Some([ms.threads, 1, 1]);
             s.lds_dwords = ms.lds_bytes.div_ceil(4);
             s.mesh = Some(super::shader::Mesh {
-                max_vertices: ms.max_vertices,
-                max_primitives: ms.max_primitives,
+                max_vertices: ms.max_vertices.min(ms.threads),
+                max_primitives: ms.max_primitives.min(ms.threads),
                 topology: ms.topology,
             });
             // Barriers order the lanes' LDS accesses; the console's
@@ -1737,6 +1737,11 @@ impl<'a> Lower<'a> {
                 let lo = word(lo)?;
                 let hi = hi.map(word).transpose()?;
                 Ok(self.lane_bit(at, lo, hi))
+            }
+            Atom::Constant(0) => Ok(self.s.m.bool(false)),
+            Atom::Constant(u64::MAX) => Ok(self.s.m.bool(true)),
+            Atom::Constant(k) if self.wave() == 32 && k == u64::from(u32::MAX) => {
+                Ok(self.s.m.bool(true))
             }
             Atom::Constant(k) if self.console_lanes => {
                 let lo = self.s.m.i32(k as u32);
@@ -5742,8 +5747,8 @@ impl<'a> Lower<'a> {
                 let h = 2 * attribute.channel;
                 let c = self.cur;
                 if f16 {
-                    let lo = half(self, h + u8::from(attribute.high))?
-                        .ok_or("a packed input half no element holds")?;
+                    let z = self.s.m.i32(0);
+                    let lo = half(self, h + u8::from(attribute.high))?.unwrap_or(z);
                     self.low_half(inst, reg, lo)
                 } else if mode == 1 {
                     // The whole dword of a flat input: both halves.
