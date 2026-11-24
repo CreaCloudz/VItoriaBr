@@ -6,7 +6,7 @@
 //! just before its execution, by a compute shader of ours (HLSL compiled by
 //! the system's compiler; a 5.1 shader with its root signature inside).
 //!
-//! Each list also has a budget (2^27 vertex instances or threads, groups
+//! Each list also has a budget (2^24 vertex instances or threads, groups
 //! counted as 64 threads, mesh groups as 128): records past it run empty,
 //! so a list of thousands of garbage records cannot run for seconds
 //! either.
@@ -33,7 +33,7 @@ RWByteAddressBuffer args : register(u0);
 // The list's work so far (vertex instances, threads): past the budget,
 // records run empty.
 RWByteAddressBuffer budget : register(u1);
-static const uint BUDGET = 1u << 27;
+static const uint BUDGET = 1u << 24;
 // Groups of one dispatch; more run empty.
 static const uint GROUPS = 1u << 20;
 [RootSignature(RS)]

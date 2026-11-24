@@ -519,20 +519,23 @@ impl Host {
         }
         batch.flush();
         let prepared = std::time::Instant::now();
-        // Diagnostics: each list on its own, timed (`VICTORY_GPU_TIMING`).
+        // Split large submissions so no single `ExecuteCommandLists` batch can
+        // accumulate more than Windows' 2 s TDR timeout on real GPUs.
+        // Diagnostics (`VICTORY_GPU_TIMING`) submits one list at a time.
+        const MAX_RUNS_PER_SUBMIT: usize = 4;
         #[cfg(feature = "diagnostics")]
-        let groups: Vec<&[Option<ID3D12CommandList>]> = if timing() {
-            firsts
-                .iter()
-                .zip(firsts.iter().skip(1).chain([&lists.len()]))
-                .map(|(&a, &b)| &lists[a..b])
-                .collect()
-        } else {
-            vec![&lists[..]]
-        };
+        let chunk_size = if timing() { 1 } else { MAX_RUNS_PER_SUBMIT };
         #[cfg(not(feature = "diagnostics"))]
-        let groups = [&lists[..]];
-        for (i, group) in groups.iter().enumerate() {
+        let chunk_size = MAX_RUNS_PER_SUBMIT;
+        for chunk_start in (0..runs.len()).step_by(chunk_size) {
+            let chunk_end = (chunk_start + chunk_size).min(runs.len());
+            let start_idx = firsts[chunk_start];
+            let end_idx = if chunk_end < runs.len() {
+                firsts[chunk_end]
+            } else {
+                lists.len()
+            };
+            let group = &lists[start_idx..end_idx];
             *submitted += 1;
             let started = std::time::Instant::now();
             // SAFETY: closed lists; the fence and event are ours.
@@ -550,16 +553,24 @@ impl Host {
                 }
             }
             #[cfg(feature = "diagnostics")]
-            if groups.len() > 1 && started.elapsed() > std::time::Duration::from_millis(50) {
+            if timing() && started.elapsed() > std::time::Duration::from_millis(50) {
                 // SAFETY: a plain query.
                 let frequency = unsafe { self.queue.GetTimestampFrequency() }.unwrap_or(1);
-                let commands = runs[i].notes.lock().unwrap_or_else(|e| e.into_inner()).len();
+                let commands = runs[chunk_start]
+                    .notes
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .len();
                 tracing::warn!(ms = started.elapsed().as_millis(), commands, "slow host list");
-                for (ms, op) in runs[i].slowest(frequency, 6) {
+                for (ms, op) in runs[chunk_start].slowest(frequency, 6) {
                     tracing::warn!("slow list command, {ms:.1} ms: {op}");
                 }
             }
-            let _ = (i, started);
+            let _ = started;
+            // SAFETY: a plain query; stop submitting further chunks if the device was removed.
+            if unsafe { self.device.GetDeviceRemovedReason() }.is_err() {
+                break;
+            }
         }
         let _ = &firsts;
         let gpu = prepared.elapsed();
