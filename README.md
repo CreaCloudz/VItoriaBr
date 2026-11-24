@@ -1,5 +1,7 @@
 # VItoriaBr
 
+> 🔴 **AO VIVO AGORA / LIVE NOW:** Acompanhe o desenvolvimento e os testes ao vivo no YouTube → **[Assistir à live](https://www.youtube.com/watch?v=n4M-vvlKkYY)**
+
 > 🇧🇷 **Português** | [🇺🇸 **English below**](#english)
 
 Camada nativa de execução em Windows para **Grand Theft Auto VI (Xbox Series X|S)**, rodando diretamente a partir dos arquivos que o próprio usuário possui.
