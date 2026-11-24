@@ -20,8 +20,41 @@ pub(crate) mod flags {
     pub const TYPED_UAV_LOADS: u64 = 1 << 13;
     pub const WAVE_OPS: u64 = 1 << 19;
     pub const INT64: u64 = 1 << 20;
+    /// 64-bit atomics on a typed resource (SM 6.6). Our resources are
+    /// descriptor-heap handles, so the validator asks for the heap-resource
+    /// feature bit (32) as well as the typed one (27).
+    pub const ATOMIC_INT64: u64 = (1 << 27) | (1 << 32);
     pub const RESOURCE_HEAP: u64 = 1 << 30;
     pub const SAMPLER_HEAP: u64 = 1 << 31;
+}
+
+/// `SFI0` feature bits for the shader flags a translation set.
+fn feature_bits(shader_flags: u64) -> u64 {
+    let mut features = 0u64;
+    if shader_flags & flags::STENCIL_REF != 0 {
+        features |= 0x200;
+    }
+    if shader_flags & flags::TYPED_UAV_LOADS != 0 {
+        features |= 0x800;
+    }
+    if shader_flags & flags::WAVE_OPS != 0 {
+        features |= 0x4000;
+    }
+    if shader_flags & (flags::INT64 | flags::ATOMIC_INT64) != 0 {
+        features |= 0x8000;
+    }
+    if shader_flags & flags::ATOMIC_INT64 != 0 {
+        // 64-bit atomics on typed resources, and on the descriptor-heap
+        // resources our handles come from.
+        features |= 0x40_0000 | 0x1000_0000;
+    }
+    if shader_flags & flags::RESOURCE_HEAP != 0 {
+        features |= 0x200_0000;
+    }
+    if shader_flags & flags::SAMPLER_HEAP != 0 {
+        features |= 0x400_0000;
+    }
+    features
 }
 
 pub(crate) struct Types {
@@ -575,25 +608,7 @@ impl Shader {
         dxil.extend((bitcode.len() as u32).to_le_bytes());
         dxil.extend(&bitcode);
 
-        let mut features = 0u64;
-        if self.flags & flags::STENCIL_REF != 0 {
-            features |= 0x200;
-        }
-        if self.flags & flags::TYPED_UAV_LOADS != 0 {
-            features |= 0x800;
-        }
-        if self.flags & flags::WAVE_OPS != 0 {
-            features |= 0x4000;
-        }
-        if self.flags & flags::INT64 != 0 {
-            features |= 0x8000;
-        }
-        if self.flags & flags::RESOURCE_HEAP != 0 {
-            features |= 0x200_0000;
-        }
-        if self.flags & flags::SAMPLER_HEAP != 0 {
-            features |= 0x400_0000;
-        }
+        let features = feature_bits(self.flags);
         let sfi0 = features.to_le_bytes();
         let isg1 = container::signature(&self.inputs, true);
         let osg1 = container::signature(&self.outputs, false);
@@ -726,6 +741,26 @@ mod tests {
             usage,
             half: false,
         }
+    }
+
+    #[test]
+    fn feature_bits_match_the_shader_flags() {
+        assert_eq!(feature_bits(0), 0);
+        assert_eq!(feature_bits(flags::INT64), 0x8000);
+        // 64-bit typed atomics need the shader-flag bits 27 and 32, and the
+        // SFI0 features for 64-bit ops, typed atomics and heap resources.
+        assert_eq!(
+            feature_bits(flags::INT64 | flags::ATOMIC_INT64),
+            0x8000 | 0x40_0000 | 0x1000_0000
+        );
+        assert_eq!(
+            feature_bits(flags::RESOURCE_HEAP | flags::SAMPLER_HEAP),
+            0x600_0000
+        );
+        assert_eq!(
+            feature_bits(flags::STENCIL_REF | flags::WAVE_OPS | flags::TYPED_UAV_LOADS),
+            0x4A00
+        );
     }
 
     #[test]
