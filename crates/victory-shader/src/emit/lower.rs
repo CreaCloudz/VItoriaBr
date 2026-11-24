@@ -2159,6 +2159,44 @@ impl<'a> Lower<'a> {
             ]
         };
         if let Some(rest) = name.strip_prefix("ds_read") {
+            if matches!(rest, "_u8" | "_i8" | "_u16" | "_i16") {
+                let reg = dst_reg.ok_or("an LDS read result")?;
+                let o = self.s.m.i32(offset);
+                let at = self.s.m.bin(c, Bin::Add, a, o);
+                let two = self.s.m.i32(2);
+                let index = self.s.m.bin(c, Bin::LShr, at, two);
+                let lds = self.s.lds();
+                let p = self.s.m.element(c, lds, index);
+                let x = self.s.m.load(c, p);
+                let three = self.s.m.i32(3);
+                let lane_byte = self.s.m.bin(c, Bin::And, at, three);
+                let three_sh = self.s.m.i32(3);
+                let bit_shift = self.s.m.bin(c, Bin::Shl, lane_byte, three_sh);
+                let shifted = self.s.m.bin(c, Bin::LShr, x, bit_shift);
+                let out = match rest {
+                    "_u8" => {
+                        let mask = self.s.m.i32(0xFF);
+                        self.s.m.bin(c, Bin::And, shifted, mask)
+                    }
+                    "_i8" => {
+                        let k24 = self.s.m.i32(24);
+                        let t = self.s.m.bin(c, Bin::Shl, shifted, k24);
+                        self.s.m.bin(c, Bin::AShr, t, k24)
+                    }
+                    "_u16" => {
+                        let mask = self.s.m.i32(0xFFFF);
+                        self.s.m.bin(c, Bin::And, shifted, mask)
+                    }
+                    "_i16" => {
+                        let k16 = self.s.m.i32(16);
+                        let t = self.s.m.bin(c, Bin::Shl, shifted, k16);
+                        self.s.m.bin(c, Bin::AShr, t, k16)
+                    }
+                    _ => unreachable!(),
+                };
+                self.write(inst, Reg::V(reg), out, guard);
+                return Ok(());
+            }
             let elements = if rest.starts_with('2') {
                 pair(name)
             } else if matches!(rest, "_b32" | "_b64" | "_b96" | "_b128") {
@@ -2179,6 +2217,40 @@ impl<'a> Lower<'a> {
             return Ok(());
         }
         if let Some(rest) = name.strip_prefix("ds_write") {
+            if matches!(rest, "_b8" | "_b16" | "_b8_d16_hi" | "_b16_d16_hi") {
+                use super::bitcode::Rmw;
+                let x = self.vgprs(inst, data.first().ok_or("an LDS write")?, 1)?[0];
+                let d16_hi = rest.ends_with("_d16_hi");
+                let raw_mask = if rest.starts_with("_b8") { 0xFF } else { 0xFFFF };
+                let src_val = if d16_hi {
+                    let k16 = self.s.m.i32(16);
+                    self.s.m.bin(c, Bin::LShr, x, k16)
+                } else {
+                    x
+                };
+                let mask_c = self.s.m.i32(raw_mask);
+                let masked = self.s.m.bin(c, Bin::And, src_val, mask_c);
+                let o = self.s.m.i32(offset);
+                let at = self.s.m.bin(c, Bin::Add, a, o);
+                let two = self.s.m.i32(2);
+                let index = self.s.m.bin(c, Bin::LShr, at, two);
+                let three = self.s.m.i32(3);
+                let lane_byte = self.s.m.bin(c, Bin::And, at, three);
+                let three_sh = self.s.m.i32(3);
+                let bit_shift = self.s.m.bin(c, Bin::Shl, lane_byte, three_sh);
+                let shifted_mask = self.s.m.bin(c, Bin::Shl, mask_c, bit_shift);
+                let all_ones = self.s.m.i32(u32::MAX);
+                let clear_mask = self.s.m.bin(c, Bin::Xor, shifted_mask, all_ones);
+                let insert_val = self.s.m.bin(c, Bin::Shl, masked, bit_shift);
+                let lds = self.s.lds();
+                let p = self.s.m.element(c, lds, index);
+                let guard_at = self.begin_guarded(guard);
+                let cur = self.cur;
+                let _ = self.s.m.atomic(cur, Rmw::And, p, clear_mask);
+                let _ = self.s.m.atomic(cur, Rmw::Or, p, insert_val);
+                self.end_guarded(guard_at, &[]);
+                return Ok(());
+            }
             let elements = if rest.starts_with('2') {
                 pair(name)
             } else if matches!(rest, "_b32" | "_b64" | "_b96" | "_b128") {
@@ -5594,9 +5666,6 @@ impl<'a> Lower<'a> {
             return Err("an image access with tfe or lwe");
         }
         let name = inst.name();
-        if *a16 && name.starts_with("image_sample_b") {
-            return Err("a biased image sample with 16-bit coordinates");
-        }
         // A load or sample with no channel enabled returns the first.
         let dmask = if *dmask == 0 { &1 } else { dmask };
         let site = (b, i);
@@ -5625,10 +5694,18 @@ impl<'a> Lower<'a> {
                 regs.extend((0..dwords).map(|k| reg + k));
             }
         }
-        // With a16, two 16-bit components per VGPR, low half first.
-        let addr_val = |l: &mut Self, k: usize| -> Result<V, Why> {
+        // Full 32-bit address dword at index `idx` (used for whole-dword prefix
+        // entries such as offset, bias, zcompare, and non-a16 coordinates).
+        let whole_val = |l: &mut Self, idx: usize| -> Result<V, Why> {
+            let r = *regs.get(idx).ok_or("an image address")?;
+            let v = inst.read(Reg::V(r)).ok_or("an image address")?;
+            l.i32_of(v)
+        };
+        // Component `k` starting at dword `base_dword`; with a16, two 16-bit
+        // components per VGPR, low half first.
+        let packed_val = |l: &mut Self, base_dword: usize, k: usize| -> Result<V, Why> {
             let r = *regs
-                .get(if *a16 { k / 2 } else { k })
+                .get(base_dword + if *a16 { k / 2 } else { k })
                 .ok_or("an image address")?;
             let v = inst.read(Reg::V(r)).ok_or("an image address")?;
             let x = l.i32_of(v)?;
@@ -5640,6 +5717,7 @@ impl<'a> Lower<'a> {
             let x = l.s.m.bin(c, Bin::LShr, x, sh);
             Ok(l.s.m.bin(c, Bin::And, x, mask))
         };
+        let addr_val = |l: &mut Self, k: usize| -> Result<V, Why> { packed_val(l, 0, k) };
         let src = self
             .descriptors
             .get(&(site, false))
@@ -5780,15 +5858,36 @@ impl<'a> Lower<'a> {
             return Ok(());
         }
         let (op, sample) = match name {
-            "image_sample" | "image_sample_o" => (60, true),
-            "image_sample_lz" | "image_sample_l" => (62, true),
-            "image_sample_b" => (61, true),
-            "image_sample_c_lz" => (65, true),
-            "image_sample_d" => (63, true),
+            "image_sample" | "image_sample_o" | "image_sample_cl" | "image_sample_cl_o" => {
+                (60, true)
+            }
+            "image_sample_lz" | "image_sample_lz_o" | "image_sample_l" | "image_sample_l_o" => {
+                (62, true)
+            }
+            "image_sample_b"
+            | "image_sample_b_o"
+            | "image_sample_b_cl"
+            | "image_sample_b_cl_o" => (61, true),
+            "image_sample_c_lz" | "image_sample_c_lz_o" => (65, true),
+            "image_sample_d"
+            | "image_sample_d_o"
+            | "image_sample_d_cl"
+            | "image_sample_d_cl_o" => (63, true),
             "image_get_lod" if self.s.pixel => (81, true),
             // Implicit derivatives: pixel shaders only.
-            "image_sample_c" if self.s.pixel => (64, true),
-            "image_gather4" | "image_gather4_lz" | "image_gather4_lz_o" => (73, true),
+            "image_sample_c"
+            | "image_sample_c_o"
+            | "image_sample_c_cl"
+            | "image_sample_c_cl_o"
+                if self.s.pixel =>
+            {
+                (64, true)
+            }
+            "image_gather4"
+            | "image_gather4_lz"
+            | "image_gather4_lz_o"
+            | "image_gather4_l"
+            | "image_gather4_l_o" => (73, true),
             "image_load" | "image_load_mip" => (66, false),
             "image_get_resinfo" => (72, false),
             _ => return Err(name),
@@ -5846,17 +5945,27 @@ impl<'a> Lower<'a> {
                 return Err("a comparison sample of 16-bit coordinates or several channels");
             }
             let sh = self.handle(site, ss, true, (14 | if cmp { 0x8000 } else { 0 }, 0))?;
-            // Texel offsets (`_o`) come first: x in bits 0-5, y in 8-13,
-            // signed (programmable offsets: gathers only).
+            // Texel offsets (`_o`), bias (`_b`), and comparison ref (`_c`) are
+            // always full 32-bit prefix dwords even when `a16` is set, matching
+            // `gfx10::fields::image_addr_dwords`.
             let offset_word = name.ends_with("_o");
-            let first =
-                usize::from(offset_word) + usize::from(name == "image_sample_b") + usize::from(cmp);
+            let has_bias = op == 61;
+            let has_clamp = name.contains("_cl");
+            let whole = usize::from(offset_word) + usize::from(has_bias) + usize::from(cmp);
             // Coordinates the size divides (not the array slice); explicit
-            // gradients (x then y) come before the coordinates.
+            // gradients (dx then dy, each dword-aligned under a16) come before
+            // the coordinates.
             let spatial = coords - usize::from(kind == 6 || kind == 7);
-            let grads = if op == 63 { 2 * spatial } else { 0 };
+            let deriv_dwords = if op == 63 {
+                if *a16 { spatial.div_ceil(2) } else { spatial }
+            } else {
+                0
+            };
+            let dx_base = whole;
+            let dy_base = dx_base + deriv_dwords;
+            let coords_base = dy_base + deriv_dwords;
             let mut cs = vec![fu; 4];
-            // With a16, sampling coordinates and LOD are f16.
+            // With a16, sampling coordinates, gradients, LOD and clamp are f16.
             let to_float = |l: &mut Self, x: V| {
                 if *a16 {
                     let f = l.s.t.f32;
@@ -5866,7 +5975,7 @@ impl<'a> Lower<'a> {
                 }
             };
             for (k, slot) in cs.iter_mut().enumerate().take(coords) {
-                let x = addr_val(self, first + grads + k)?;
+                let x = packed_val(self, coords_base, k)?;
                 *slot = to_float(self, x);
             }
             if kind == 5 {
@@ -5921,39 +6030,44 @@ impl<'a> Lower<'a> {
             for o in os.iter_mut().take(offsets) {
                 *o = zero;
             }
+            if offset_word && op != 73 {
+                // DXIL takes immediate offsets in -8..=7; the console's are
+                // 6-bit and may be computed.
+                let w = whole_val(self, 0)?;
+                let w = self
+                    .s
+                    .m
+                    .int_value(w)
+                    .ok_or("a sample offset that is not constant")? as u32;
+                for (k, o) in os.iter_mut().enumerate().take(offsets) {
+                    let x = (w >> (8 * k) & 0x3F) as i32;
+                    let x = if x >= 32 { x - 64 } else { x };
+                    if !(-8..=7).contains(&x) {
+                        return Err("a sample offset past -8..7");
+                    }
+                    *o = self.s.m.i32(x as u32);
+                }
+            }
+            let clamp_val = if has_clamp {
+                let x = packed_val(self, coords_base, coords)?;
+                to_float(self, x)
+            } else {
+                fu
+            };
             let mut args = vec![h, sh];
             args.extend(&cs);
             match op {
                 60 => {
-                    if offset_word {
-                        // DXIL takes immediate offsets in -8..=7; the
-                        // console's are 6-bit and may be computed.
-                        let w = addr_val(self, 0)?;
-                        let w = self
-                            .s
-                            .m
-                            .int_value(w)
-                            .ok_or("a sample offset that is not constant")?
-                            as u32;
-                        for (k, o) in os.iter_mut().enumerate().take(offsets) {
-                            let x = (w >> (8 * k) & 0x3F) as i32;
-                            let x = if x >= 32 { x - 64 } else { x };
-                            if !(-8..=7).contains(&x) {
-                                return Err("a sample offset past -8..7");
-                            }
-                            *o = self.s.m.i32(x as u32);
-                        }
-                    }
                     args.extend(&os);
-                    args.push(fu);
+                    args.push(clamp_val);
                     self.s
                         .op(c, "sample.f32", Attr::ReadOnly, self.s.t.res_ret, 60, &args)
                 }
                 61 => {
-                    let bias = addr_val(self, 0)?;
+                    let bias = whole_val(self, usize::from(offset_word))?;
                     let bias = self.as_float(bias);
                     args.extend(&os);
-                    args.extend([bias, fu]);
+                    args.extend([bias, clamp_val]);
                     self.s.op(
                         c,
                         "sampleBias.f32",
@@ -5966,14 +6080,14 @@ impl<'a> Lower<'a> {
                 63 => {
                     let mut g = vec![fu; 6];
                     for k in 0..spatial {
-                        let x = addr_val(self, first + k)?;
+                        let x = packed_val(self, dx_base, k)?;
                         g[k] = to_float(self, x);
-                        let y = addr_val(self, first + spatial + k)?;
+                        let y = packed_val(self, dy_base, k)?;
                         g[3 + k] = to_float(self, y);
                     }
                     args.extend(&os);
                     args.extend(g);
-                    args.push(fu);
+                    args.push(clamp_val);
                     self.s.op(
                         c,
                         "sampleGrad.f32",
@@ -5984,12 +6098,12 @@ impl<'a> Lower<'a> {
                     )
                 }
                 64 | 65 => {
-                    let reference = addr_val(self, first - 1)?;
+                    let reference = whole_val(self, whole - 1)?;
                     let reference = self.as_float(reference);
                     args.extend(&os);
                     args.push(reference);
                     let name = if op == 64 {
-                        args.push(fu);
+                        args.push(clamp_val);
                         "sampleCmp.f32"
                     } else {
                         "sampleCmpLevelZero.f32"
@@ -5998,8 +6112,8 @@ impl<'a> Lower<'a> {
                         .op(c, name, Attr::ReadOnly, self.s.t.res_ret, op, &args)
                 }
                 62 => {
-                    let lod = if name == "image_sample_l" {
-                        let x = addr_val(self, coords)?;
+                    let lod = if name == "image_sample_l" || name == "image_sample_l_o" {
+                        let x = packed_val(self, coords_base, coords)?;
                         to_float(self, x)
                     } else {
                         self.s.m.f32(0)
@@ -6023,7 +6137,7 @@ impl<'a> Lower<'a> {
                         return Err("a gather of several channels");
                     }
                     if offset_word {
-                        let w = addr_val(self, 0)?;
+                        let w = whole_val(self, 0)?;
                         for (k, at) in [(0, 26), (1, 18)] {
                             // Bits at..at+5 sign-extended: shift up, then down.
                             let left = self.s.m.i32(at);
