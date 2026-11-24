@@ -465,10 +465,44 @@ impl<'a> Lower<'a> {
                 LaneExit::End | LaneExit::Indirect => [None, None],
             }
         };
+        let rpo_order = crate::ir::reverse_postorder(&p.blocks);
+        let mut rpo_rank = vec![usize::MAX; p.blocks.len()];
+        for (n, &blk) in rpo_order.iter().enumerate() {
+            rpo_rank[blk] = n;
+        }
+        // Any block that has a `LaneExit::Jump` back-edge can exit early to
+        // `abort_block` (`Term::Ret`) when `LOOP_LIMIT` triggers; any
+        // `s_barrier` reachable from such a block would deadlock `BAR.SYNC`.
+        let mut after_abort = vec![false; x.st.exits.len()];
+        {
+            let mut stack = Vec::new();
+            for (u, ex) in x.st.exits.iter().enumerate() {
+                if let LaneExit::Jump(t) = *ex
+                    && t < rpo_rank.len()
+                    && u < rpo_rank.len()
+                    && rpo_rank[t] <= rpo_rank[u]
+                {
+                    after_abort[u] = true;
+                    stack.push(u);
+                }
+            }
+            while let Some(u) = stack.pop() {
+                for next in succs(&x.st.exits, u).into_iter().flatten() {
+                    if !after_abort[next] {
+                        after_abort[next] = true;
+                        stack.push(next);
+                    }
+                }
+            }
+        }
         for (b, blk) in p.blocks.iter().enumerate() {
             if no_barrier.contains(&b)
                 || !blk.insts.iter().any(|i| i.name() == "s_barrier")
             {
+                continue;
+            }
+            if b < after_abort.len() && after_abort[b] {
+                fence_only_barrier.insert(b);
                 continue;
             }
             // 1. Can `End` be reached from entry (0) without passing through `b`?
