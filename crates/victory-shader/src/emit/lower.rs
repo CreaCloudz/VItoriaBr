@@ -5954,10 +5954,13 @@ impl<'a> Lower<'a> {
             let whole = usize::from(offset_word) + usize::from(has_bias) + usize::from(cmp);
             // Coordinates the size divides (not the array slice); explicit
             // gradients (dx then dy, each dword-aligned under a16) come before
-            // the coordinates.
+            // the coordinates. A cube's gradients cover two components (the
+            // face's dx/dy), not its three coordinates; this is also what
+            // `gfx10::fields::image_addr_dwords` counts.
             let spatial = coords - usize::from(kind == 6 || kind == 7);
+            let grads = if kind == 5 { 2 } else { spatial };
             let deriv_dwords = if op == 63 {
-                if *a16 { spatial.div_ceil(2) } else { spatial }
+                if *a16 { grads.div_ceil(2) } else { grads }
             } else {
                 0
             };
