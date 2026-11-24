@@ -193,6 +193,9 @@ struct Lower<'a> {
     flat: Option<V>,
     /// Mesh: IR blocks whose `s_barrier` is left out.
     no_barrier: HashSet<usize>,
+    /// IR blocks whose `s_barrier` omits `SYNC_THREAD_GROUP` (memory fence
+    /// only) because the block can be bypassed or iterated divergently.
+    fence_only_barrier: HashSet<usize>,
     /// Vertex and mesh outputs holding 16-bit values: row, whether two per
     /// dword, and the row packed after it.
     half_outputs: HashMap<u8, (bool, Option<u8>)>,
@@ -449,6 +452,72 @@ impl<'a> Lower<'a> {
                 }
             }
         }
+        // Any `s_barrier` in a block that does not post-dominate entry (can be
+        // bypassed by a branch or early return) or lies inside a loop can
+        // deadlock `BAR.SYNC` on wave32 NVIDIA when waves diverge. Emit a
+        // memory-only fence (`TGSM_FENCE` / `UAV_FENCE`, omitting bit 0
+        // `SYNC_THREAD_GROUP`) for those blocks.
+        let mut fence_only_barrier = HashSet::new();
+        let succs = |exits: &[LaneExit], blk: usize| -> [Option<usize>; 2] {
+            match exits[blk] {
+                LaneExit::Jump(t) => [Some(t), None],
+                LaneExit::Branch { taken, not_taken, .. } => [Some(taken), Some(not_taken)],
+                LaneExit::End | LaneExit::Indirect => [None, None],
+            }
+        };
+        for (b, blk) in p.blocks.iter().enumerate() {
+            if no_barrier.contains(&b)
+                || !blk.insts.iter().any(|i| i.name() == "s_barrier")
+            {
+                continue;
+            }
+            // 1. Can `End` be reached from entry (0) without passing through `b`?
+            let mut can_skip = false;
+            if b != 0 && !x.st.exits.is_empty() {
+                let mut seen = vec![false; x.st.exits.len()];
+                let mut stack = vec![0usize];
+                seen[0] = true;
+                while let Some(u) = stack.pop() {
+                    if matches!(x.st.exits[u], LaneExit::End | LaneExit::Indirect) {
+                        can_skip = true;
+                        break;
+                    }
+                    for next in succs(&x.st.exits, u).into_iter().flatten() {
+                        if next != b && !seen[next] {
+                            seen[next] = true;
+                            stack.push(next);
+                        }
+                    }
+                }
+            }
+            // 2. Is `b` inside a cycle/loop in the structured CFG?
+            let mut in_loop = false;
+            if !can_skip && b < x.st.exits.len() {
+                let mut seen = vec![false; x.st.exits.len()];
+                let mut stack = Vec::new();
+                for next in succs(&x.st.exits, b).into_iter().flatten() {
+                    if !seen[next] {
+                        seen[next] = true;
+                        stack.push(next);
+                    }
+                }
+                while let Some(u) = stack.pop() {
+                    if u == b {
+                        in_loop = true;
+                        break;
+                    }
+                    for next in succs(&x.st.exits, u).into_iter().flatten() {
+                        if !seen[next] {
+                            seen[next] = true;
+                            stack.push(next);
+                        }
+                    }
+                }
+            }
+            if can_skip || in_loop {
+                fence_only_barrier.insert(b);
+            }
+        }
         Lower {
             s,
             x,
@@ -488,6 +557,7 @@ impl<'a> Lower<'a> {
             console_lanes,
             flat: None,
             no_barrier,
+            fence_only_barrier,
             half_outputs: half_outputs(&x.native.io, &x.outputs),
             mask_data: match x.native.stage {
                 HwStage::Cs => MaskData::Console,
@@ -2371,7 +2441,15 @@ impl<'a> Lower<'a> {
                 // Thread-group sync with a shared-memory fence, and a UAV
                 // fence when the program writes UAVs (the waits before an
                 // s_barrier make those writes visible on the console).
-                let mode = if self.writes_uavs { 1 | 2 | 8 } else { 1 | 8 };
+                // Omit SYNC_THREAD_GROUP (bit 0) when the block does not
+                // post-dominate entry or lies inside a loop so wave32/lane
+                // divergence cannot deadlock `BAR.SYNC` on NVIDIA.
+                let sync = if self.fence_only_barrier.contains(&b) {
+                    0
+                } else {
+                    1
+                };
+                let mode = sync | if self.writes_uavs { 2 | 8 } else { 8 };
                 let mode = self.s.m.i32(mode);
                 let void = self.s.t.void;
                 self.s
