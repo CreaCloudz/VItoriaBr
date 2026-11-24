@@ -81,11 +81,22 @@ pub(crate) struct State {
     table_failed: bool,
 }
 
-impl Drop for State {
-    fn drop(&mut self) {
-        for &(heap, first, n) in &self.dynamic {
+impl State {
+    /// Returns every dynamic descriptor slot held by this list to its host
+    /// heap. Safe immediately after `host.execute` has waited for the GPU to
+    /// finish running the list, avoiding slot exhaustion on capped (NVIDIA)
+    /// heaps while the title keeps closed lists around before `Reset`.
+    pub(crate) fn release_dynamic_slots(&mut self) {
+        self.fresh_tables.clear();
+        for (heap, first, n) in self.dynamic.drain(..) {
             crate::descriptor::release_dynamic(heap, first, n);
         }
+    }
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        self.release_dynamic_slots();
     }
 }
 

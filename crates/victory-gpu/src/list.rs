@@ -143,6 +143,21 @@ pub(crate) fn host_list<'a>(this: This) -> Option<&'a crate::host::HostList> {
     unsafe { (*this.cast::<List>()).host.as_ref() }
 }
 
+/// Releases dynamic descriptor slots held by a title list after `host.execute`
+/// has finished running it on the GPU.
+#[cfg(windows)]
+pub(crate) fn release_executed_slots(this: This) {
+    if this.is_null() {
+        return;
+    }
+    // SAFETY: the title passes one of our lists.
+    let state = unsafe { &(*this.cast::<List>()).state };
+    state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .release_dynamic_slots();
+}
+
 pub(crate) extern "system" fn create_allocator(
     _: This,
     kind: u32,
