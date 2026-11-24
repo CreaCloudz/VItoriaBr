@@ -58,8 +58,17 @@ void main(uint3 id : SV_DispatchThreadID) {
         args.Store3(at, g);
     } else {
         // Mesh dispatches: the console's are one-dimensional.
+        // An uninitialized/garbage indirect buffer (e.g. when a wave64 culling
+        // compute shader was refused on wave32 NVIDIA) holds huge counts:
+        // zero out-of-range records instead of clamping them to 65,535 groups,
+        // matching `kind == 2` above, and cap valid dispatches to 16,384
+        // groups so one record cannot trigger Windows' 2 s TDR.
         uint3 g = args.Load3(at);
-        g = uint3(min(g.x, 65535u), min(g.y, 1u), min(g.z, 1u));
+        if (g.x > 65535u || g.y > 1u || g.z > 1u) {
+            g = uint3(0, 0, 0);
+        } else {
+            g = uint3(min(g.x, 16384u), g.y, g.z);
+        }
         cost = g.x * g.y * g.z * 128;
         args.Store3(at, g);
     }
