@@ -144,6 +144,7 @@ fn root_view(list: &HostList, address: u64, srv: bool) -> Option<u64> {
     let gpu = shadow.gpu(address);
     if srv || gpu % 256 == 0 {
         shadow.refresh(list, address, len);
+        list.ensure_buffer_state(&shadow, D3D12_RESOURCE_STATE_GENERIC_READ);
         return Some(gpu);
     }
     let (gpu, to) = list.scratch(len)?;
@@ -371,6 +372,7 @@ impl State {
                 continue;
             };
             shadow.refresh(list, v.address, u64::from(v.size));
+            list.ensure_buffer_state(&shadow, D3D12_RESOURCE_STATE_GENERIC_READ);
             *view = D3D12_VERTEX_BUFFER_VIEW {
                 BufferLocation: shadow.gpu(v.address),
                 SizeInBytes: v.size,
@@ -389,6 +391,7 @@ impl State {
                 return false;
             };
             shadow.refresh(list, v.address, u64::from(v.size));
+            list.ensure_buffer_state(&shadow, D3D12_RESOURCE_STATE_GENERIC_READ);
             let view = D3D12_INDEX_BUFFER_VIEW {
                 BufferLocation: shadow.gpu(v.address),
                 SizeInBytes: v.size,
@@ -1010,9 +1013,10 @@ impl State {
         args.refresh(list, arguments, len);
         if let Some((s, at)) = &counter {
             s.refresh(list, *at, 4);
+            list.ensure_buffer_state(s, D3D12_RESOURCE_STATE_GENERIC_READ);
         }
         // Bounded first: the clamp binds a compute pipeline of its own.
-        if !crate::indirect::bound(list, &args.buffer, args.gpu(arguments), (kind, stride, max)) {
+        if !crate::indirect::bound(list, &args, args.gpu(arguments), (kind, stride, max)) {
             why("not bounded (no clamp, or arguments not 4-byte aligned)");
             return false;
         }
@@ -1035,6 +1039,10 @@ impl State {
                 Some(p) => why(&format!("prepare failed (compute {}, mesh {})", p.compute, p.mesh)),
             }
             return false;
+        }
+        list.ensure_buffer_state(&args, D3D12_RESOURCE_STATE_GENERIC_READ);
+        if let Some((s, _)) = &counter {
+            list.ensure_buffer_state(s, D3D12_RESOURCE_STATE_GENERIC_READ);
         }
         #[cfg(feature = "diagnostics")]
         list.note_op(|| {
@@ -1116,6 +1124,9 @@ fn readable(list: &HostList, u: &UsedResource, view: &View) {
         shadow.refresh(list, address, len);
         if u.kind == ResourceType::Uav {
             shadow.gpu_writes(list, address, len);
+            list.ensure_buffer_state(&shadow, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        } else {
+            list.ensure_buffer_state(&shadow, D3D12_RESOURCE_STATE_GENERIC_READ);
         }
     }
     match (view, u.kind) {

@@ -294,6 +294,8 @@ pub(crate) struct HostList {
     /// list names alive until it is reset, even if the title releases the
     /// resource first.
     states: Mutex<States>,
+    /// Host shadow buffer states the list assumes (same prelude pattern as `states`).
+    buffer_states: Mutex<BufferStates>,
     /// The list that runs those transitions just before this one.
     prelude: (ID3D12CommandAllocator, ID3D12GraphicsCommandList),
     /// The pipelines the list binds, for reports of slow submissions.
@@ -322,6 +324,11 @@ type Note = (String, Option<(u64, u64)>);
 type States = std::collections::HashMap<
     usize,
     (u32, u32, std::sync::Arc<crate::resource::HostTexture>),
+>;
+
+type BufferStates = std::collections::HashMap<
+    usize,
+    (u32, u32, std::sync::Arc<crate::shadow::Shadow>),
 >;
 
 /// Whether device-removed data is on (`VICTORY_D3D12_DRED`, diagnostics
@@ -478,6 +485,7 @@ impl Host {
                 deferred: Mutex::default(),
                 scratch: Mutex::default(),
                 states: Mutex::default(),
+                buffer_states: Mutex::default(),
                 prelude: (prelude_allocator, prelude),
                 pipelines: Mutex::default(),
                 budget: OnceLock::new(),
@@ -882,6 +890,7 @@ impl HostList {
     pub(crate) fn reset(&self) {
         *self.deferred() = Deferred::default();
         self.states.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.buffer_states.lock().unwrap_or_else(|e| e.into_inner()).clear();
         self.pipelines.lock().unwrap_or_else(|e| e.into_inner()).clear();
         #[cfg(feature = "diagnostics")]
         self.notes.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -925,12 +934,48 @@ impl HostList {
         }
     }
 
-    /// At submission: the list that moves each texture this list uses from
-    /// its real state to the one the list starts with; the textures' real
-    /// states become those the list ends with.
+    /// Moves a title buffer's host shadow copy to `wanted` in this list,
+    /// recording a barrier only when the state changes within the list; the
+    /// first use is transitioned by `prelude` at submission.
+    pub(crate) fn ensure_buffer_state(
+        &self,
+        shadow: &std::sync::Arc<crate::shadow::Shadow>,
+        wanted: D3D12_RESOURCE_STATES,
+    ) {
+        let wanted_u32 = wanted.0 as u32;
+        let before = {
+            let mut states = self
+                .buffer_states
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            match states.entry(std::sync::Arc::as_ptr(shadow) as usize) {
+                std::collections::hash_map::Entry::Vacant(v) => {
+                    v.insert((wanted_u32, wanted_u32, std::sync::Arc::clone(shadow)));
+                    None
+                }
+                std::collections::hash_map::Entry::Occupied(mut o) => {
+                    let prev = std::mem::replace(&mut o.get_mut().1, wanted_u32);
+                    (prev != wanted_u32).then_some(prev)
+                }
+            }
+        };
+        if let Some(before) = before {
+            let barrier = transition(
+                &shadow.buffer,
+                D3D12_RESOURCE_STATES(before as i32),
+                wanted,
+            );
+            // SAFETY: an open list and a live shadow buffer held in `buffer_states`.
+            unsafe { self.list.ResourceBarrier(&[barrier]) };
+        }
+    }
+
+    /// At submission: the list that moves each texture and shadow buffer this
+    /// list uses from its real state to the one the list starts with; their
+    /// real states become those the list ends with.
     fn prelude(&self) -> Option<ID3D12CommandList> {
         let states = self.states.lock().unwrap_or_else(|e| e.into_inner());
-        let barriers: Vec<D3D12_RESOURCE_BARRIER> = states
+        let mut barriers: Vec<D3D12_RESOURCE_BARRIER> = states
             .values()
             .filter_map(|(first, last, copy)| {
                 let real = copy.state.swap(*last, Ordering::Relaxed);
@@ -943,6 +988,20 @@ impl HostList {
                 })
             })
             .collect();
+        let buffer_states = self
+            .buffer_states
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        barriers.extend(buffer_states.values().filter_map(|(first, last, shadow)| {
+            let real = shadow.state.swap(*last, Ordering::Relaxed);
+            (real != *first).then(|| {
+                transition(
+                    &shadow.buffer,
+                    D3D12_RESOURCE_STATES(real as i32),
+                    D3D12_RESOURCE_STATES(*first as i32),
+                )
+            })
+        }));
         if barriers.is_empty() {
             return None;
         }
@@ -1555,7 +1614,7 @@ impl Meter {
             self.caption = Some(buffer);
         }
         let Some(caption) = &self.caption else { return };
-        let text = format!(" | VIctory {fps:.0} fps {ms:.1} ms/frame {draws:.0} draws/frame");
+        let text = format!(" | VItoriaBr {fps:.0} fps {ms:.1} ms/frame {draws:.0} draws/frame");
         let mut text: Vec<u16> = caption.iter().copied().chain(text.encode_utf16()).collect();
         text.push(0);
         // Setting the text waits for the window's thread (a title thread,
@@ -1932,7 +1991,7 @@ extern "system" fn window_proc(
 }
 
 fn make_window(width: u32, height: u32) -> windows::core::Result<HWND> {
-    const CLASS: PCWSTR = w!("VIctory");
+    const CLASS: PCWSTR = w!("VItoriaBr");
     // SAFETY: registers our class once and creates a window of it.
     unsafe {
         let instance = GetModuleHandleW(None)?;
@@ -1955,7 +2014,7 @@ fn make_window(width: u32, height: u32) -> windows::core::Result<HWND> {
         CreateWindowExW(
             WINDOW_EX_STYLE(0),
             CLASS,
-            w!("VIctory"),
+            w!("VItoriaBr"),
             WS_OVERLAPPEDWINDOW | WS_VISIBLE,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
