@@ -33,12 +33,12 @@ Medido com `victory translate --validate --pipelines` (`dxil.dll` Windows SDK `1
 
 | Estágio | DXIL emitidos | Validados (`dxil.dll`) | PSOs aceitos (RTX 5060 Ti) | Taxa (PSOs / emitidos) |
 |---------|---------------|------------------------|----------------------------|------------------------|
-| **Vertex + Pixel** | `12.932 / 14.039` | `12.890` | **`12.932`** | **100,0%** |
-| **Mesh** | `8.214 / 8.713` | `8.153` | **`8.214`** | **100,0%** |
-| **Compute** | `1.473 / 2.582` | `1.449` | **`1.135`** | **77,1%** |
-| **Total** | **`22.619 / 25.334`** | **`22.492`** | **`22.281`** | **98,5%** |
+| **Vertex + Pixel** | `14.152 / 14.259` | `14.041` | **`14.152`** | **100,0%** |
+| **Mesh** | `8.762 / 8.765` | `8.657` | **`8.762`** | **100,0%** |
+| **Compute** | `2.715 / 2.734` | `2.715` | **`2.326`** | **85,7%** |
+| **Total** | **`25.629 / 25.758` (99,5%)** | **`25.413`** | **`25.240`** | **98,5%** |
 
-> Os únicos `338` PSOs recusados pela RTX 5060 Ti são compute shaders que exigem **wave64** (GPUs NVIDIA são wave32).
+> Os únicos `389` PSOs recusados pela RTX 5060 Ti são compute shaders que exigem **wave64** (GPUs NVIDIA são wave32).
 
 ### Melhorias já aplicadas no VItoriaBr
 - **Rastreamento completo de estado de `Shadow` buffers no `HostList`** (`crates/victory-gpu/src/{shadow,host,indirect,draw}.rs`):
@@ -141,12 +141,12 @@ Measured via `victory translate --validate --pipelines` (`dxil.dll` Windows SDK 
 
 | Stage | DXIL Emitted | Validated (`dxil.dll`) | Host PSOs (RTX 5060 Ti) | PSO Rate |
 |-------|--------------|------------------------|-------------------------|----------|
-| **Vertex + Pixel** | `12,932 / 14,039` | `12,890` | **`12,932`** | **100.0%** |
-| **Mesh** | `8,214 / 8,713` | `8,153` | **`8,214`** | **100.0%** |
-| **Compute** | `1,473 / 2,582` | `1,449` | **`1,135`** | **77.1%** |
-| **Total** | **`22,619 / 25,334`** | **`22,492`** | **`22,281`** | **98.5%** |
+| **Vertex + Pixel** | `14,152 / 14,259` | `14,041` | **`14,152`** | **100.0%** |
+| **Mesh** | `8,762 / 8,765` | `8,657` | **`8,762`** | **100.0%** |
+| **Compute** | `2,715 / 2,734` | `2,715` | **`2,326`** | **85.7%** |
+| **Total** | **`25,629 / 25,758` (99.5%)** | **`25,413`** | **`25,240`** | **98.5%** |
 
-> The `338` refused Compute PSOs are wave64-only shaders (NVIDIA GPUs run wave32).
+> The `389` refused Compute PSOs are wave64-only shaders (NVIDIA GPUs run wave32).
 
 #### VItoriaBr Improvements
 - **Full `Shadow` buffer D3D12 resource state tracking in `HostList`** (`crates/victory-gpu/src/{shadow,host,indirect,draw}.rs`):
