@@ -105,11 +105,15 @@ cargo build --release -p victory
 # Opcional (1x por atualização): pré-aquece todo o cache de shaders antes de abrir o título
 .\target\release\victory.exe warm <pasta_do_jogo>
 
-# Preset recomendado na RTX 5060 Ti 16 GB (visual completo sem pele/chão pretos, zero TDR)
+# Preset recomendado na RTX 5060 Ti 16 GB (visual completo fotorrealista, zero pele preta, zero TDR)
 $env:VICTORY_RELAY = "2"
+$env:VICTORY_QUEUE2 = "1"
+$env:VICTORY_ASYNC_SUBMIT = "1"
+$env:VICTORY_COPY_PLAIN = "1"
 $env:VICTORY_TEXTURE_NO_WAIT = "1"
 $env:VICTORY_CARD_BUFFERS_MB = "2048"
 $env:VICTORY_TEXTURE_BUDGET_MB = "10240"
+$env:VICTORY_PAGE_WRITES = "slots"
 $env:VICTORY_AMBIENT = "0.6"
 $env:VICTORY_WIDE_REFRESH = "1"
 $env:VICTORY_WIDE_MERGE = "1"
@@ -120,8 +124,11 @@ $env:VICTORY_DISPLAY_MODE = "1920x1080"
 ```
 
 #### Achados importantes de tuning & diagnóstico
-- **Pele ou chão pretos (VRAM cheia / `no room for new ones`):** quando `VICTORY_CARD_BUFFERS_MB` reserva VRAM demais (ex.: `6144` em 16 GB ou padrão em placas de 8 GB), o uploader de texturas bate nos 90% da VRAM e para de subir texturas novas (como pele de personagens e terreno). Baixar `VICTORY_CARD_BUFFERS_MB` (`2048` em 16 GB; `1024` em 8 GB) e definir `VICTORY_TEXTURE_BUDGET_MB` (`10240` em 16 GB; `5120` em 8 GB) resolve o problema.
-- **`VICTORY_AMBIENT=0.6` (padrão):** ativa o pass de iluminação ambiente com sombreamento por profundidade (portado de `Belobug/VIctory-Belobug-AMD`, GPL-3.0), mantendo personagens e interiores iluminados enquanto o RTGI completo ainda não roda. Use `0` para desligar.
+- **Pele ou chão pretos (VRAM cheia / streaming):** dois fatores resolvidos:
+  1. **`VICTORY_CARD_BUFFERS_MB=2048` + `VICTORY_TEXTURE_BUDGET_MB=10240`** (em 8 GB: `1024` e `5120`) evita o limite de 90% da VRAM (`no room for new ones`), que impedia novas texturas de pele/terreno de subir.
+  2. **`VICTORY_PAGE_WRITES=slots`** re-enfileira automaticamente texturas `placed` que foram subidas antes de o título terminar de gravar seus bytes (recuperou 7.000+ texturas por sessão).
+- **`VICTORY_QUEUE2=1` + `VICTORY_ASYNC_SUBMIT=1` + `VICTORY_COPY_PLAIN=1`:** corta `copying back` em **~3×** (`~205 ms → ~65–78 ms`) usando a Copy Queue dedicada, executa ~12.400 cópias in-place/frame (`~290 MB/frame`) sem syscall do kernel e derruba `textures` pela metade (`~40 ms → ~20 ms`).
+- **`VICTORY_AMBIENT=0.6` (padrão):** ativa o pass de iluminação ambiente com sombreamento por profundidade (portado de `Belobug/VIctory-Belobug-AMD`, GPL-3.0), mantendo personagens, pele, veículos, água e interiores totalmente iluminados enquanto o RTGI completo ainda não roda. Use `0` para desligar.
 - **`VICTORY_TEXTURE_NO_WAIT=1`**: elimina stalls de lock na leitura de memória do título durante refresh de texturas (`textures` cai de `900–3.700 ms` para `6–25 ms`).
 - **`VICTORY_DISPLAY_MODE=1920x1080`**: reduz a resolução interna de renderização mesmo em monitores 4K (a janela apenas faz upscale barato no `Present`).
 - **`VICTORY_CARD_FETCH_INFLIGHT` (deixar desligado / `0`)**: ligá-lo derruba `copying back` de `~162 ms` para `~45 ms`, mas sobrecarrega a GPU (`on the GPU` sobe de `~50–65 ms` para `~200–330 ms`), reduzindo o FPS total na RTX 5060 Ti (`1.9–2.6 fps` vs `3.5–6.0 fps`).
@@ -222,11 +229,15 @@ cargo test --workspace
 cargo build --release -p victory
 .\target\release\victory.exe warm <game_dir>   # optional: pre-translate shaders into the cache first
 
-# Recommended preset tested on RTX 5060 Ti 16 GB (full textures, no black skin/ground, zero TDR)
+# Recommended preset tested on RTX 5060 Ti 16 GB (photorealistic skin/water/foliage, zero black skin, zero TDR)
 $env:VICTORY_RELAY = "2"
+$env:VICTORY_QUEUE2 = "1"
+$env:VICTORY_ASYNC_SUBMIT = "1"
+$env:VICTORY_COPY_PLAIN = "1"
 $env:VICTORY_TEXTURE_NO_WAIT = "1"
 $env:VICTORY_CARD_BUFFERS_MB = "2048"
 $env:VICTORY_TEXTURE_BUDGET_MB = "10240"
+$env:VICTORY_PAGE_WRITES = "slots"
 $env:VICTORY_AMBIENT = "0.6"
 $env:VICTORY_WIDE_REFRESH = "1"
 $env:VICTORY_WIDE_MERGE = "1"
@@ -236,7 +247,7 @@ $env:VICTORY_DISPLAY_MODE = "1920x1080"
 .\target\release\victory.exe run --execute <game_dir>\<title_exe>
 ```
 
-> **Tuning notes (RTX 5060 Ti & 8 GB GPUs):** If character skin or ground appears black, check the log for `the card has no room for new ones` — reserving too much VRAM for `VICTORY_CARD_BUFFERS_MB` prevents late-streamed albedo textures from uploading. Use `VICTORY_CARD_BUFFERS_MB=2048` + `VICTORY_TEXTURE_BUDGET_MB=10240` on 16 GB GPUs (`1024` / `5120` on 8 GB GPUs). Keep `VICTORY_CARD_FETCH_INFLIGHT` off (`0`, default) — enabling it drops `copying back` (`~162 → ~45 ms`) but increases `on the GPU` (`~50–65 → ~200–330 ms`), lowering overall FPS. `VICTORY_BVH_BUILDER=1` reaches `50/53` compute shaders on wave32 (missing 3 `v_readfirstlane_b32` scans: `39321a95223001ed`, `77360df21e12ea43`, `9fc111d3be79364f`); `VICTORY_FIRSTLANE_OWN=1` reaches `53/53` and activates the builder, but corrupts BVH AABB offsets (~18 s crash), so leave it off for now.
+> **Tuning notes (RTX 5060 Ti & 8 GB GPUs):** Use `VICTORY_CARD_BUFFERS_MB=2048` + `VICTORY_TEXTURE_BUDGET_MB=10240` on 16 GB GPUs (`1024` / `5120` on 8 GB GPUs) together with `VICTORY_PAGE_WRITES=slots` to prevent `the card has no room for new ones` and re-upload late-written placed textures (fixing black skin and ground). Enabling `VICTORY_QUEUE2=1`, `VICTORY_ASYNC_SUBMIT=1`, and `VICTORY_COPY_PLAIN=1` cuts `copying back` by ~3× (`~205 → ~65–78 ms`) and handles ~12,400 in-place copies/frame without kernel syscalls. Keep `VICTORY_CARD_FETCH_INFLIGHT` off (`0`, default). `VICTORY_BVH_BUILDER=1` reaches `50/53` compute shaders on wave32 (missing 3 `v_readfirstlane_b32` scans: `39321a95223001ed`, `77360df21e12ea43`, `9fc111d3be79364f`); leave `VICTORY_FIRSTLANE_OWN` off for now.
 
 Diagnostics build:
 ```powershell
