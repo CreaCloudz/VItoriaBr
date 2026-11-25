@@ -1,7 +1,5 @@
 # VItoriaBr
 
-> 🔴 **AO VIVO AGORA / LIVE NOW:** Acompanhe o desenvolvimento e os testes ao vivo no YouTube → **[Assistir à live](https://www.youtube.com/watch?v=GBm1pRUwWu8)**
-
 > 🇧🇷 **Português** | [🇺🇸 **English below**](#english)
 
 Camada nativa de execução em Windows para **um título Xbox Series X|S**, rodando diretamente a partir dos arquivos que o próprio usuário possui.
