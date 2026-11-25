@@ -14,6 +14,7 @@
 //! the texels are tiled into the texture's title memory in the console's
 //! layout, as the console's GPU would have left them.
 //!
+//! Ported from myokex/victory-amd `1544bd5` (GPL-3.0-or-later).
 //! From Geckomacabre/vx-layer `eee5667d` as fxceless PR 999 has it (with the
 //! allocation tickets and the flights' ranges of its second commit). The
 //! height map is in a pipe and bank XOR swizzle mode, which the layouts
