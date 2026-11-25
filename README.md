@@ -31,18 +31,22 @@ Medido com `victory translate --validate --pipelines` (`dxil.dll` Windows SDK `1
 
 | Estágio | DXIL emitidos | Validados (`dxil.dll`) | PSOs aceitos (RTX 5060 Ti) | Taxa (PSOs / emitidos) |
 |---------|---------------|------------------------|----------------------------|------------------------|
-| **Vertex + Pixel** | `14.176 / 14.259` | `14.173` | **`14.176`** | **100,0%** |
+| **Vertex + Pixel** | `14.211 / 14.259` | `14.211` | **`14.211`** | **100,0%** |
 | **Mesh** | `8.762 / 8.765` | `8.691` | **`8.762`** | **100,0%** |
-| **Compute** | `2.724 / 2.734` | `2.724` | **`2.328`** | **85,5%** |
-| **Total** | **`25.662 / 25.758` (99,6%)** | **`25.588`** | **`25.266`** | **98,5%** |
+| **Compute** | `2.728 / 2.734` | `2.728` | **`2.331`** | **85,4%** |
+| **Total** | **`25.701 / 25.758` (99,8%)** | **`25.630`** | **`25.304`** | **98,4%** |
 
-> Os únicos `396` PSOs recusados pela RTX 5060 Ti são compute shaders que exigem **wave64** (GPUs NVIDIA são wave32).
+> Os únicos `397` PSOs recusados pela RTX 5060 Ti são compute shaders que exigem **wave64** (GPUs NVIDIA são wave32).
 
 ### Melhorias já aplicadas no VItoriaBr
 - **Assinaturas e interpolação reconciliadas** (`c0b60a0`, `crates/victory-shader/src/emit/{shader,container}.rs`):
   - `reconcile_row_interp` foi restaurada (o merge grande a havia removido): elementos empacotados na mesma row compartilham um único modo de interpolação; **~250 shaders** deixaram de falhar no `dxil.dll`.
   - A ordem dos elementos de `ISG1`/`OSG1` agora é a do console (sem ordenar por registrador), fechando as **33 falhas de input signature** e **39 de output signature**.
-  - Resultado no v7: **`25.588` validados** (eram `25.413`), restando só `71` mesh `>32KB` e `3` `out of bound coord`.
+  - Resultado no v7: **`25.588` validados** (eram `25.413`).
+- **Descritores de tabela com índice calculado lidos como dado (SLOT_VIEWS)** (`b62bbc0`, `18df163`, `77ad907`, `crates/victory-shader/src/emit/lower.rs` + `crates/victory-gpu`):
+  - A nova root SRV `SLOT_VIEWS` (252) expõe, por slot do heap, o endereço/len/stride da view de buffer; o emissor usa essa tabela quando o console lê o **endereço de um descritor** cujo índice é calculado em runtime.
+  - `calculateLOD` de texturas array agora deixa a coordenada do slice `undef`, como o DXC exige; isso zerou os `3` `out of bound coord must be undef`.
+  - Resultado no v9: **`25.701 / 25.758` DXIL (99,8%)**, **`25.630` validados**, **`25.304` PSOs**; as categorias `descriptor read only as data` (40) e `out of bound coord` (3) foram **zeradas**.
 - **Rastreamento completo de estado de `Shadow` buffers no `HostList`** (`crates/victory-gpu/src/{shadow,host,indirect,draw}.rs`):
   - Antes, `indirect::done()` deixava `title buffer` compartilhados presos em `D3D12_RESOURCE_STATE_UNORDERED_ACCESS`, causando erros de validação em `IASetVertexBuffers` e `id=527` no D3D12 Debug Layer.
   - Agora cada `Shadow` buffer rastreia seu estado via `prelude()` e transições intra-lista (`GENERIC_READ` para VB/IB/CBV/SRV/Indirect `args`+`counter`, `UNORDERED_ACCESS` para UAV/clamp), **zerando os erros de barreira no D3D12 Debug Layer** e estendendo significativamente a execução dentro do mundo 3D na RTX 5060 Ti.
@@ -143,12 +147,12 @@ Measured via `victory translate --validate --pipelines` (`dxil.dll` Windows SDK 
 
 | Stage | DXIL Emitted | Validated (`dxil.dll`) | Host PSOs (RTX 5060 Ti) | PSO Rate |
 |-------|--------------|------------------------|-------------------------|----------|
-| **Vertex + Pixel** | `14,176 / 14,259` | `14,173` | **`14,176`** | **100.0%** |
+| **Vertex + Pixel** | `14,211 / 14,259` | `14,211` | **`14,211`** | **100.0%** |
 | **Mesh** | `8,762 / 8,765` | `8,691` | **`8,762`** | **100.0%** |
-| **Compute** | `2,724 / 2,734` | `2,724` | **`2,328`** | **85.5%** |
-| **Total** | **`25,662 / 25,758` (99.6%)** | **`25,588`** | **`25,266`** | **98.5%** |
+| **Compute** | `2,728 / 2,734` | `2,728` | **`2,331`** | **85.4%** |
+| **Total** | **`25,701 / 25,758` (99.8%)** | **`25,630`** | **`25,304`** | **98.4%** |
 
-> The `396` refused Compute PSOs are wave64-only shaders (NVIDIA GPUs run wave32).
+> The `397` refused Compute PSOs are wave64-only shaders (NVIDIA GPUs run wave32).
 
 #### VItoriaBr Improvements
 - **Full `Shadow` buffer D3D12 resource state tracking in `HostList`** (`crates/victory-gpu/src/{shadow,host,indirect,draw}.rs`):
