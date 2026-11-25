@@ -161,7 +161,14 @@ $env:VICTORY_DISPLAY_MODE = "1920x1080"
 - **`VICTORY_TEXTURE_NO_WAIT=1`**: elimina stalls de lock na leitura de memória do título durante refresh de texturas (`textures` cai de `900–3.700 ms` para `6–25 ms`).
 - **`VICTORY_DISPLAY_MODE=1920x1080`**: reduz a resolução interna de renderização mesmo em monitores 4K (a janela apenas faz upscale barato no `Present`).
 - **`VICTORY_CARD_FETCH_INFLIGHT` (deixar desligado / `0`)**: ligá-lo derruba `copying back` de `~162 ms` para `~45 ms`, mas sobrecarrega a GPU (`on the GPU` sobe de `~50–65 ms` para `~200–330 ms`), reduzindo o FPS total na RTX 5060 Ti (`1.9–2.6 fps` vs `3.5–6.0 fps`).
-- **`VICTORY_BVH_BUILDER=1` (RTGI — experimental)**: atinge **50/53** compute shaders em wave32; os 3 faltantes (`39321a95223001ed`, `77360df21e12ea43`, `9fc111d3be79364f`) falham em `v_readfirstlane_b32` sob divergência. Com `VICTORY_FIRSTLANE_OWN=1` o builder chega a **53/53** e ativa, mas o atalho corrompe offsets de AABB na memória (crash após ~18 s) — manter desligado até a troca completa entre metades da wave64.
+- **Duração da sessão:** para ver há quanto tempo o processo está no ar (e a RAM/CPU acumulada):
+  ```powershell
+  Get-Process victory_release* | Select-Object Id,ProcessName,StartTime,
+    @{n='Horas';e={[math]::Round(((Get-Date)-$_.StartTime).TotalHours,2)}},
+    @{n='RAM_GB';e={[math]::Round($_.WorkingSet64/1GB,2)}},CPU
+  ```
+  Exemplo medido (v19, 25/11): **2 h 12 min** de processo, **14,9 GB** de RAM e **~10 h** de CPU acumulada.
+- **`VICTORY_BVH_BUILDER=1` (RTGI — experimental)**: com a prova de uniformidade do scan, os 3 shaders de `v_readfirstlane_b32` (`39321a95223001ed`, `77360df21e12ea43`, `9fc111d3be79364f`) agora traduzem e validam em wave32; `VICTORY_FIRSTLANE_OWN=1` deixou de ser necessário. Restam 2 PSOs recusados no builder para investigar.
 
 ### Build de diagnóstico (`diag`)
 ```powershell
@@ -302,7 +309,15 @@ $env:VICTORY_DISPLAY_MODE = "1920x1080"
 
 - **16 GB RAM + HDD tips:** Close browsers and heavy background apps before launching to leave RAM for Windows file caching, and set a manual **16 GB–24 GB** SSD pagefile to prevent Windows error `1455` during loading.
 
-> **Tuning notes (RTX 5060 Ti & 8 GB GPUs):** Enabling `VICTORY_TABLE_BUFFERS=1`, `VICTORY_INDIRECT_GATHER=1`, and `VICTORY_SYNC_NULL_SKIP` (default on) doubled open-world FPS on RTX 5060 Ti (`2.7 → 5.8 fps` at `3840x2160`, cutting `preparing` from `~230 ms` to `~105–113 ms`). `VICTORY_TEXTURE_BACK=1` restores shader-written water wave textures. The 2-line performance HUD (`VITORIABR | FPS | MS | DRAWS` + `RES | VRAM | GPU`) is controlled via `VICTORY_FPS_COUNTER` (`1`/`full` default, `compact`, or `0`). Use `VICTORY_CARD_BUFFERS_MB=2048` + `VICTORY_TEXTURE_BUDGET_MB=10240` on 16 GB GPUs (`1024` / `5120` on 8 GB GPUs) together with `VICTORY_PAGE_WRITES=slots` to prevent `the card has no room for new ones` and re-upload late-written placed textures (fixing black skin and ground). Keep `VICTORY_CARD_FETCH_INFLIGHT` off (`0`, default).
+> **Tuning notes (RTX 5060 Ti & 8 GB GPUs):** Enabling `VICTORY_TABLE_BUFFERS=1`, `VICTORY_INDIRECT_GATHER=1`, and `VICTORY_SYNC_NULL_SKIP` (default on) doubled open-world FPS on RTX 5060 Ti (`2.7 → 5.8 fps` at `3840x2160`, cutting `preparing` from `~230 ms` to `~105–113 ms`). `VICTORY_TEXTURE_BACK=1` restores shader-written water wave textures. The 2-line performance HUD (`VITORIABR | FPS | MS | DRAWS` + `RES | VRAM | GPU`) is controlled via `VICTORY_FPS_COUNTER` (`1`/`full` default, `compact`, or `0`). Use `VICTORY_CARD_BUFFERS_MB=2048` + `VICTORY_TEXTURE_BUDGET_MB=10240` on 16 GB GPUs (`1024` / `5120` on 8 GB GPUs) together with `VICTORY_PAGE_WRITES=slots` to prevent `the card has no room for new ones` and re-upload late-written placed textures (fixing black skin and ground). Keep `VICTORY_CARD_FETCH_INFLIGHT` off (`0`, default). To check session uptime, RAM and accumulated CPU:
+>
+> ```powershell
+> Get-Process victory_release* | Select-Object Id,ProcessName,StartTime,
+>   @{n='Horas';e={[math]::Round(((Get-Date)-$_.StartTime).TotalHours,2)}},
+>   @{n='RAM_GB';e={[math]::Round($_.WorkingSet64/1GB,2)}},CPU
+> ```
+>
+> Measured example (v19, Nov 25): **2 h 12 min**, **14.9 GB** RAM, **~10 h** CPU.
 
 Diagnostics build:
 ```powershell
