@@ -32,9 +32,9 @@ Medido com `victory translate --validate --pipelines` (`dxil.dll` Windows SDK `1
 | Estágio | DXIL emitidos | Validados (`dxil.dll`) | PSOs aceitos (RTX 5060 Ti) | Taxa (PSOs / emitidos) |
 |---------|---------------|------------------------|----------------------------|------------------------|
 | **Vertex + Pixel** | `14.211 / 14.259` | `14.211` | **`14.211`** | **100,0%** |
-| **Mesh** | `8.762 / 8.765` | `8.691` | **`8.762`** | **100,0%** |
+| **Mesh** | `8.765 / 8.765` | `8.694` | **`8.765`** | **100,0%** |
 | **Compute** | `2.728 / 2.734` | `2.728` | **`2.331`** | **85,4%** |
-| **Total** | **`25.701 / 25.758` (99,8%)** | **`25.630`** | **`25.304`** | **98,4%** |
+| **Total** | **`25.704 / 25.758` (99,8%)** | **`25.633`** | **`25.307`** | **98,4%** |
 
 > Os únicos `397` PSOs recusados pela RTX 5060 Ti são compute shaders que exigem **wave64** (GPUs NVIDIA são wave32).
 
@@ -46,7 +46,8 @@ Medido com `victory translate --validate --pipelines` (`dxil.dll` Windows SDK `1
 - **Descritores de tabela com índice calculado lidos como dado (SLOT_VIEWS)** (`b62bbc0`, `18df163`, `77ad907`, `crates/victory-shader/src/emit/lower.rs` + `crates/victory-gpu`):
   - A nova root SRV `SLOT_VIEWS` (252) expõe, por slot do heap, o endereço/len/stride da view de buffer; o emissor usa essa tabela quando o console lê o **endereço de um descritor** cujo índice é calculado em runtime.
   - `calculateLOD` de texturas array agora deixa a coordenada do slice `undef`, como o DXC exige; isso zerou os `3` `out of bound coord must be undef`.
-  - Resultado no v9: **`25.701 / 25.758` DXIL (99,8%)**, **`25.630` validados**, **`25.304` PSOs**; as categorias `descriptor read only as data` (40) e `out of bound coord` (3) foram **zeradas**.
+  - Resultado no v12: **`25.704 / 25.758` DXIL (99,8%)**, **`25.633` validados**, **`25.307` PSOs**; as categorias `descriptor read only as data` (40) e `out of bound coord` (3) foram **zeradas**.
+- **Dois samplers imediatos escolhidos por branch** (`67bb579`, `2ec2aa2`): nos `3` mesh `MST_DS_*`, o phi entre os dois samplers constantes virou um handle de **static sampler range** com índice dinâmico; os 3 agora emitem, validam e criam PSO. Os `37` pixel shaders restantes continuam falhando (o range em PS gera bitcode recusado), então a otimização vale só para estágios não-pixel.
 - **Rastreamento completo de estado de `Shadow` buffers no `HostList`** (`crates/victory-gpu/src/{shadow,host,indirect,draw}.rs`):
   - Antes, `indirect::done()` deixava `title buffer` compartilhados presos em `D3D12_RESOURCE_STATE_UNORDERED_ACCESS`, causando erros de validação em `IASetVertexBuffers` e `id=527` no D3D12 Debug Layer.
   - Agora cada `Shadow` buffer rastreia seu estado via `prelude()` e transições intra-lista (`GENERIC_READ` para VB/IB/CBV/SRV/Indirect `args`+`counter`, `UNORDERED_ACCESS` para UAV/clamp), **zerando os erros de barreira no D3D12 Debug Layer** e estendendo significativamente a execução dentro do mundo 3D na RTX 5060 Ti.
@@ -148,9 +149,9 @@ Measured via `victory translate --validate --pipelines` (`dxil.dll` Windows SDK 
 | Stage | DXIL Emitted | Validated (`dxil.dll`) | Host PSOs (RTX 5060 Ti) | PSO Rate |
 |-------|--------------|------------------------|-------------------------|----------|
 | **Vertex + Pixel** | `14,211 / 14,259` | `14,211` | **`14,211`** | **100.0%** |
-| **Mesh** | `8,762 / 8,765` | `8,691` | **`8,762`** | **100.0%** |
+| **Mesh** | `8,765 / 8,765` | `8,694` | **`8,765`** | **100.0%** |
 | **Compute** | `2,728 / 2,734` | `2,728` | **`2,331`** | **85.4%** |
-| **Total** | **`25,701 / 25,758` (99.8%)** | **`25,630`** | **`25,304`** | **98.4%** |
+| **Total** | **`25,704 / 25,758` (99.8%)** | **`25,633`** | **`25,307`** | **98.4%** |
 
 > The `397` refused Compute PSOs are wave64-only shaders (NVIDIA GPUs run wave32).
 
