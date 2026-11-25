@@ -2712,24 +2712,7 @@ impl<'a> Lower<'a> {
         }
         let c = self.cur;
         let slot = self.heap_index(site, first, false)?;
-        let last = self.s.m.i32(super::shader::SLOT_VIEWS_COUNT - 1);
-        let i32t = self.s.t.i32;
-        let slot = self.s.op(c, "binary.i32", Attr::ReadNone, i32t, 40, &[slot, last]);
-        self.s.m.tag(slot, Tag::Clamp);
-        let three = self.s.m.i32(3);
-        let byte = self.s.m.bin(c, Bin::Shl, slot, three);
-        let h = self.s.root_srv_handle(super::shader::SLOT_VIEWS);
-        let iu = self.s.m.undef(self.s.t.i32);
-        let mask = self.s.m.i8(0xF);
-        let align = self.s.m.i32(4);
-        let r = self.s.op(
-            c,
-            "rawBufferLoad.f32",
-            Attr::ReadOnly,
-            self.s.t.res_ret,
-            139,
-            &[h, byte, iu, mask, align],
-        );
+        let r = self.s.read_view_slot(c, slot);
         let lo = self.s.m.extract(c, r, 0);
         let hi = self.s.m.extract(c, r, 1);
         let len = self.s.m.extract(c, r, 2);

@@ -688,7 +688,8 @@ impl HostHeap {
             .flatten();
         let views = (!sampler)
             .then(|| {
-                let bytes = u64::from(victory_shader::emit::SLOT_VIEWS_COUNT) * 16;
+                let bytes = u64::from(victory_shader::emit::SLOT_VIEWS_COUNT)
+                    * u64::from(victory_shader::emit::SLOT_VIEW_BYTES);
                 let (buffer, data) = host.upload_buffer(bytes)?;
                 // SAFETY: the buffer's whole mapping; a live buffer.
                 let gpu = unsafe {
@@ -1162,7 +1163,8 @@ impl HostHeap {
             // SAFETY: inside the mapping; a whole slot, written at once:
             // the address, the byte length and the element stride.
             unsafe {
-                let at = (*data as *mut u32).add(index as usize * 4);
+                let offset = index as usize * victory_shader::emit::SLOT_VIEW_BYTES as usize;
+                let at = (*data as *mut u8).add(offset).cast::<u32>();
                 let (address, len) = range.unwrap_or((0, 0));
                 at.write_volatile(address as u32);
                 at.add(1).write_volatile((address >> 32) as u32);

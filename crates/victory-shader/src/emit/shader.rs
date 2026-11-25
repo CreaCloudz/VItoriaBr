@@ -2,7 +2,7 @@
 //! the `dx.op` declarations it calls, its signatures and bound resources,
 //! and the metadata and container that wrap it up (SM 6.6, validator 1.6).
 
-use super::bitcode::{Attr, Md, Module, Ty, V};
+use super::bitcode::{Attr, Bin, Md, Module, Tag, Ty, V};
 use super::container::{self, Binding, Psv, SigElement};
 
 /// Where the shader reads its user data: `b0` in this space.
@@ -37,6 +37,8 @@ pub const SLOT_STRIDES_COUNT: u32 = 1 << 21;
 pub const SLOT_VIEWS: u8 = 252;
 /// Slots of the [`SLOT_VIEWS`] buffer (heap indices are clamped to it).
 pub const SLOT_VIEWS_COUNT: u32 = SLOT_STRIDES_COUNT;
+/// Byte stride of a view entry: address low and high, byte length, and stride.
+pub const SLOT_VIEW_BYTES: u32 = 4 * size_of::<u32>() as u32;
 
 /// Title memory by address (`resource::MEMORY`): console code reads and
 /// writes through raw 40-bit addresses it takes from root constants,
@@ -336,6 +338,27 @@ impl Shader {
         self.flags |= flags::RAW_BUFFERS;
         self.root_srvs.push((slot, h));
         h
+    }
+
+    /// Loads the four dwords of one entry in the host view-address table.
+    pub fn read_view_slot(&mut self, block: usize, slot: V) -> V {
+        let last = self.m.i32(SLOT_VIEWS_COUNT - 1);
+        let slot = self.op(block, "binary.i32", Attr::ReadNone, self.t.i32, 40, &[slot, last]);
+        self.m.tag(slot, Tag::Clamp);
+        let stride = self.m.i32(SLOT_VIEW_BYTES);
+        let byte = self.m.bin(block, Bin::Mul, slot, stride);
+        let handle = self.root_srv_handle(SLOT_VIEWS);
+        let unused = self.m.undef(self.t.i32);
+        let mask = self.m.i8(0xf);
+        let alignment = self.m.i32(4);
+        self.op(
+            block,
+            "rawBufferLoad.f32",
+            Attr::ReadOnly,
+            self.t.res_ret,
+            139,
+            &[handle, byte, unused, mask, alignment],
+        )
     }
 
     /// The handle of the root UAV (a raw buffer) of root parameter `slot`:
@@ -947,6 +970,78 @@ fn reconcile_row_interp(elems: &mut [SigElement]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn the_view_table_loads_each_slot_at_its_own_address() {
+        use crate::emit::bitcode::Term;
+        use crate::emit::host::{Dispatch, Host, Root, View};
+        use crate::emit::{HostShader, HwStage};
+
+        let _guard = crate::emit::valu_tests::ONE_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let Ok(host) = Host::new(true) else {
+            eprintln!("no SM 6.6 WARP adapter; skipped");
+            return;
+        };
+        let mut s = Shader::new(false);
+        s.threads = Some([2, 1, 1]);
+        let block = s.entry;
+        let thread = s.op(
+            block,
+            "flattenedThreadIdInGroup.i32",
+            Attr::ReadNone,
+            s.t.i32,
+            96,
+            &[],
+        );
+        let entry = s.read_view_slot(block, thread);
+        let [address_low, address_high, length, stride] =
+            [0, 1, 2, 3].map(|word| s.m.extract(block, entry, word));
+        let zero = s.m.i32(0);
+        let output = s.heap_handle(block, zero, false, false, (11 | 0x1000, 0));
+        let output_stride = s.m.i32(16);
+        let offset = s.m.bin(block, Bin::Mul, thread, output_stride);
+        let unused = s.m.undef(s.t.i32);
+        let mask = s.m.i8(0xf);
+        let alignment = s.m.i32(4);
+        s.op(
+            block,
+            "rawBufferStore.f32",
+            Attr::NoUnwind,
+            s.t.void,
+            140,
+            &[output, offset, unused, address_low, address_high, length, stride, mask, alignment],
+        );
+        s.m.terminate(block, Term::Ret);
+        let shader = HostShader {
+            stage: HwStage::Cs,
+            root_srvs: vec![SLOT_VIEWS],
+            dxil: s.finish(),
+            user_data: Vec::new(),
+            samplers: Vec::new(),
+            static_samplers: Vec::new(),
+            root_cbvs: Vec::new(),
+            root_uavs: Vec::new(),
+            root_indexed_views: Vec::new(),
+        };
+        let data = [0x1020_3040, 0x100, 320, 20, 0x5060_7080, 0x200, 768, 24];
+        let (root, pipeline) = host.compute_pipeline(&shader).expect("view table pipeline");
+        let read = host
+            .dispatch(
+                &root,
+                &pipeline,
+                &Dispatch {
+                    roots: vec![(1, Root::View { srv: true, data: data.to_vec() })],
+                    views: &[View::RawUav(8)],
+                    samplers: &[],
+                    groups: [1, 1, 1],
+                },
+            )
+            .expect("view table dispatch");
+        assert_eq!(read[0], data);
+    }
 
     fn elem(name: &str, kind: u8, comp: u8, interp: u8, row: u32, col: u8, usage: u8) -> SigElement {
         SigElement {
