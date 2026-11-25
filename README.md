@@ -81,8 +81,12 @@ cargo test --workspace
 
 # 3. Compilar em release
 cargo build --release -p victory
+# (opcional) pré-traduz os shaders para o cache antes da 1ª execução
+.\target\release\victory.exe warm <pasta_do_jogo>
 .\target\release\victory.exe run <pasta_do_jogo>\<executavel_do_titulo> --execute
 ```
+
+> Pré-compilação de shaders (`victory warm`), o que ela cobre e como conferir no log: [docs/precompilacao-shaders.md](docs/precompilacao-shaders.md).
 
 ### Build de diagnóstico (`diag`)
 ```powershell
@@ -177,6 +181,7 @@ copy victory.example.toml victory.toml   # set paths outside the repository
 cargo run -p victory -- config
 cargo test --workspace
 cargo build --release -p victory
+.\target\release\victory.exe warm <game_dir>   # optional: translate shaders into the cache first
 .\target\release\victory.exe run <game_dir>\<title_exe> --execute
 ```
 
